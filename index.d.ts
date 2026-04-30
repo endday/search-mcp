@@ -96,6 +96,7 @@ export interface Env {
   HEALTH_STATE_TTL_SECONDS?: string;
   CORS_ALLOWED_ORIGINS?: string[] | string;
   CORS_ALLOWED_HEADERS?: string[] | string;
+  AUTH_REQUIRED?: string;
   TOKEN?: string;
   CF_BROWSER_RENDERING_ACCOUNT_ID?: string;
   CF_BROWSER_RENDERING_API_TOKEN?: string;

@@ -23,6 +23,7 @@ const createDefaultEnv = () => ({
   HEALTH_STATE_TTL_SECONDS: "3600",
   CORS_ALLOWED_ORIGINS: ["*"],
   CORS_ALLOWED_HEADERS: ["Authorization", "Content-Type", "x-api-key"],
+  AUTH_REQUIRED: "false",
   TOKEN: null,
   CF_BROWSER_RENDERING_ACCOUNT_ID: null,
   CF_BROWSER_RENDERING_API_TOKEN: null,

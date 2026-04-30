@@ -6,6 +6,10 @@ import { enforceRateLimit } from "./utils/rateLimit.js";
 import { searchAllWithMeta } from "./utils/searchGateway.js";
 
 const ALLOWED_METHODS = "GET, POST, OPTIONS";
+const TARGET_FETCH_USER_AGENT =
+  "Mozilla/5.0 (compatible; CloudflareSearchReader/1.0; +https://workers.cloudflare.com/)";
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_SAFE_REDIRECTS = 5;
 
 function buildCorsHeaders(request) {
   const headers = {
@@ -78,12 +82,34 @@ function getRequestToken(request, paramToken) {
   return getBearerToken(request) || request.headers.get("x-api-key") || paramToken;
 }
 
+function isTruthyConfig(value) {
+  return ["1", "true", "yes", "on", "required"].includes(
+    String(value || "").trim().toLowerCase()
+  );
+}
+
+function isAuthRequired() {
+  return !!env.TOKEN || isTruthyConfig(env.AUTH_REQUIRED);
+}
+
+function ensureAuthConfigured() {
+  if (isTruthyConfig(env.AUTH_REQUIRED) && !env.TOKEN) {
+    throw new ApiError({
+      status: 503,
+      code: "AUTH_TOKEN_NOT_CONFIGURED",
+      category: "configuration",
+      message:
+        "AUTH_REQUIRED is enabled but TOKEN is not configured. Set TOKEN as a Cloudflare Worker secret before deploying publicly.",
+    });
+  }
+}
+
 function isAuthorizedToken(requestToken) {
-  if (!env.TOKEN) {
+  if (!isAuthRequired()) {
     return true;
   }
 
-  return requestToken === env.TOKEN;
+  return !!env.TOKEN && requestToken === env.TOKEN;
 }
 
 function verifyToken(requestToken) {
@@ -91,7 +117,7 @@ function verifyToken(requestToken) {
 }
 
 function getRateLimitToken(requestToken) {
-  if (!env.TOKEN) {
+  if (!isAuthRequired()) {
     return null;
   }
 
@@ -182,37 +208,159 @@ function normalizeWaitUntil(value) {
     : "load";
 }
 
+function parseIpv4Address(value) {
+  const match = String(value || "").match(
+    /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const octets = match.slice(1).map((part) => Number.parseInt(part, 10));
+  return {
+    octets,
+    valid: octets.every((part) => part >= 0 && part <= 255),
+  };
+}
+
+function isBlockedIpv4Address(octets) {
+  const [first, second] = octets;
+
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    first >= 224
+  );
+}
+
+function parseIpv6Hextets(value) {
+  let normalized = String(value || "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .split("%")[0];
+
+  if (!normalized.includes(":")) {
+    return null;
+  }
+
+  const embeddedIpv4Match = normalized.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (embeddedIpv4Match) {
+    const parsedIpv4 = parseIpv4Address(embeddedIpv4Match[1]);
+    if (!parsedIpv4?.valid) {
+      return null;
+    }
+
+    const [a, b, c, d] = parsedIpv4.octets;
+    const replacement = `${((a << 8) | b).toString(16)}:${(
+      (c << 8) |
+      d
+    ).toString(16)}`;
+    normalized =
+      normalized.slice(0, normalized.length - embeddedIpv4Match[1].length) +
+      replacement;
+  }
+
+  const compressionParts = normalized.split("::");
+  if (compressionParts.length > 2) {
+    return null;
+  }
+
+  const hasCompression = compressionParts.length === 2;
+  const leftParts = compressionParts[0]
+    ? compressionParts[0].split(":")
+    : [];
+  const rightParts =
+    hasCompression && compressionParts[1]
+      ? compressionParts[1].split(":")
+      : [];
+  const parts = [...leftParts, ...rightParts];
+
+  if (parts.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) {
+    return null;
+  }
+
+  if (!hasCompression && parts.length !== 8) {
+    return null;
+  }
+
+  const fillCount = hasCompression ? 8 - parts.length : 0;
+  if (fillCount < 1 && hasCompression) {
+    return null;
+  }
+
+  return [
+    ...leftParts.map((part) => Number.parseInt(part, 16)),
+    ...Array(fillCount).fill(0),
+    ...rightParts.map((part) => Number.parseInt(part, 16)),
+  ];
+}
+
+function getEmbeddedIpv4FromIpv6(hextets) {
+  if (!hextets || hextets.length !== 8) {
+    return null;
+  }
+
+  const lastIpv4 = [
+    hextets[6] >> 8,
+    hextets[6] & 255,
+    hextets[7] >> 8,
+    hextets[7] & 255,
+  ];
+
+  const isIpv4Mapped =
+    hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff;
+  const isIpv4Compatible = hextets.slice(0, 6).every((part) => part === 0);
+  const isNat64WellKnown =
+    hextets[0] === 0x0064 &&
+    hextets[1] === 0xff9b &&
+    hextets.slice(2, 6).every((part) => part === 0);
+
+  return isIpv4Mapped || isIpv4Compatible || isNat64WellKnown ? lastIpv4 : null;
+}
+
+function isBlockedIpv6Address(hextets) {
+  if (!hextets || hextets.length !== 8) {
+    return false;
+  }
+
+  const first = hextets[0];
+  const embeddedIpv4 = getEmbeddedIpv4FromIpv6(hextets);
+
+  return (
+    hextets.every((part) => part === 0) ||
+    hextets.slice(0, 7).every((part) => part === 0) ||
+    (first & 0xfe00) === 0xfc00 ||
+    (first & 0xffc0) === 0xfe80 ||
+    (first & 0xff00) === 0xff00 ||
+    (embeddedIpv4 ? isBlockedIpv4Address(embeddedIpv4) : false)
+  );
+}
+
 function isBlockedTargetHostname(hostname) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
 
   if (
     normalized === "localhost" ||
     normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    normalized === "::1"
+    normalized.endsWith(".local")
   ) {
     return true;
   }
 
-  const ipv4Match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!ipv4Match) {
-    return false;
+  const parsedIpv4 = parseIpv4Address(normalized);
+  if (parsedIpv4) {
+    return !parsedIpv4.valid || isBlockedIpv4Address(parsedIpv4.octets);
   }
 
-  const octets = ipv4Match.slice(1).map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => part < 0 || part > 255)) {
-    return true;
-  }
-
-  const [first, second] = octets;
-  return (
-    first === 0 ||
-    first === 10 ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
+  return isBlockedIpv6Address(parseIpv6Hextets(normalized));
 }
 
 function normalizeTargetUrl(value) {
@@ -258,6 +406,66 @@ function normalizeTargetUrl(value) {
   }
 
   return parsedUrl.toString();
+}
+
+function getSafeRedirectUrl(response, currentUrl) {
+  if (!REDIRECT_STATUSES.has(response.status)) {
+    return null;
+  }
+
+  const location = response.headers.get("location");
+  if (!location) {
+    return null;
+  }
+
+  return normalizeTargetUrl(new URL(location, currentUrl).toString());
+}
+
+async function cancelResponseBody(response) {
+  try {
+    await response.body?.cancel();
+  } catch (_) {
+    // Ignored: this is only a best-effort cleanup for redirect/preflight checks.
+  }
+}
+
+async function fetchWithSafeRedirects(targetUrl, init = {}) {
+  let currentUrl = normalizeTargetUrl(targetUrl);
+
+  for (let redirectCount = 0; redirectCount <= MAX_SAFE_REDIRECTS; redirectCount += 1) {
+    const response = await fetch(currentUrl, {
+      ...init,
+      redirect: "manual",
+    });
+    const redirectUrl = getSafeRedirectUrl(response, currentUrl);
+
+    if (!redirectUrl) {
+      return response;
+    }
+
+    await cancelResponseBody(response);
+    currentUrl = redirectUrl;
+  }
+
+  throw new ApiError({
+    status: 508,
+    code: "TOO_MANY_REDIRECTS",
+    category: "upstream",
+    message: "Target URL redirected too many times",
+  });
+}
+
+async function verifySafeRedirectChain(targetUrl) {
+  const response = await fetchWithSafeRedirects(targetUrl, {
+    method: "GET",
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Range: "bytes=0-0",
+      "User-Agent": TARGET_FETCH_USER_AGENT,
+    },
+  });
+
+  await cancelResponseBody(response);
 }
 
 async function readResponseTextWithLimit(response, maxBytes) {
@@ -445,6 +653,7 @@ function resolveSearchLanguage(params, query) {
 async function handleAuthVerify(request, params, requestId) {
   const requestToken = getRequestToken(request, params.token);
 
+  ensureAuthConfigured();
   await enforceRateLimit(request, getRateLimitToken(requestToken));
 
   if (!verifyToken(requestToken)) {
@@ -460,7 +669,7 @@ async function handleAuthVerify(request, params, requestId) {
     request,
     {
       authorized: true,
-      token_required: !!env.TOKEN,
+      token_required: isAuthRequired(),
     },
     200,
     {
@@ -483,6 +692,7 @@ async function handleSearch(request, params, requestId) {
     });
   }
 
+  ensureAuthConfigured();
   await enforceRateLimit(request, getRateLimitToken(requestToken));
 
   if (!verifyToken(requestToken)) {
@@ -606,6 +816,7 @@ async function handleMarkdown(request, params, requestId) {
   const requestToken = getRequestToken(request, params.token);
   const startedAt = Date.now();
 
+  ensureAuthConfigured();
   await enforceRateLimit(request, getRateLimitToken(requestToken));
 
   if (!verifyToken(requestToken)) {
@@ -618,6 +829,8 @@ async function handleMarkdown(request, params, requestId) {
   }
 
   const { accountId, apiToken } = getBrowserRenderingConfig();
+  await verifySafeRedirectChain(targetUrl);
+
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/browser-rendering/markdown`;
   const upstreamResponse = await fetch(endpoint, {
     method: "POST",
@@ -687,6 +900,7 @@ async function handleHtml(request, params, requestId) {
     max: 5_000_000,
   });
 
+  ensureAuthConfigured();
   await enforceRateLimit(request, getRateLimitToken(requestToken));
 
   if (!verifyToken(requestToken)) {
@@ -698,13 +912,11 @@ async function handleHtml(request, params, requestId) {
     });
   }
 
-  const upstreamResponse = await fetch(targetUrl, {
+  const upstreamResponse = await fetchWithSafeRedirects(targetUrl, {
     headers: {
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "User-Agent":
-        "Mozilla/5.0 (compatible; CloudflareSearchReader/1.0; +https://workers.cloudflare.com/)",
+      "User-Agent": TARGET_FETCH_USER_AGENT,
     },
-    redirect: "follow",
   });
   const contentType = upstreamResponse.headers.get("content-type") || "";
 

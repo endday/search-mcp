@@ -5,7 +5,11 @@ import { env } from "../envs.js";
 // ============================================
 
 export function getSearchHtml() {
-  const TOKEN_ENABLED = !!env.TOKEN;
+  const AUTH_REQUIRED = ["1", "true", "yes", "on", "required"].includes(
+    String(env.AUTH_REQUIRED || "").trim().toLowerCase()
+  );
+  const TOKEN_CONFIGURED = !!env.TOKEN;
+  const TOKEN_ENABLED = TOKEN_CONFIGURED || AUTH_REQUIRED;
   const DEFAULT_ENGINES = env.DEFAULT_ENGINES || [];
   const handlerEngineDefaultChecked = (engine) =>
     DEFAULT_ENGINES.includes(engine) ? "checked" : "";
@@ -50,98 +54,229 @@ export function getSearchHtml() {
 
   <style>
     :root {
-      --bg-primary: theme('colors.zinc.50');
-      --bg-secondary: theme('colors.white');
-      --text-primary: theme('colors.zinc.800');
-      --text-secondary: theme('colors.zinc.600');
-      --border-color: theme('colors.zinc.100');
-      --accent-color: theme('colors.blue.500');
+      --page-bg: #f6f1e8;
+      --surface: #fffdf8;
+      --surface-muted: #f1eadf;
+      --ink: #20231f;
+      --ink-muted: #6f756b;
+      --line: #ded5c8;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --warning: #b45309;
+      --danger: #b91c1c;
     }
 
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg-primary: theme('colors.black');
-        --bg-secondary: theme('colors.zinc.900');
-        --text-primary: theme('colors.zinc.100');
-        --text-secondary: theme('colors.zinc.400');
-        --border-color: rgba(63, 63, 70, 0.4);
-        --accent-color: theme('colors.blue.400');
+        --page-bg: #121411;
+        --surface: #1b1f1b;
+        --surface-muted: #252a25;
+        --ink: #f3f1e8;
+        --ink-muted: #a9afa4;
+        --line: #343a33;
+        --accent: #5eead4;
+        --accent-strong: #99f6e4;
+        --warning: #fbbf24;
+        --danger: #f87171;
       }
     }
 
     body {
-      background-color: var(--bg-primary);
-      color: var(--text-primary);
+      background:
+        linear-gradient(90deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(15, 118, 110, 0.05) 1px, transparent 1px),
+        var(--page-bg);
+      background-size: 28px 28px;
+      color: var(--ink);
+      font-family: Aptos, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .panel {
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(32, 35, 31, 0.08);
+    }
+
+    .muted-panel {
+      background: var(--surface-muted);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .field {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 0.72rem 0.85rem;
+      font-size: 0.92rem;
+      outline: none;
+      transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .field:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .action-btn {
+      border-radius: 8px;
+      background: var(--ink);
+      color: var(--surface);
+      padding: 0.75rem 1rem;
+      font-size: 0.92rem;
+      font-weight: 700;
+      transition: transform 160ms ease, opacity 160ms ease;
+    }
+
+    .action-btn:hover {
+      transform: translateY(-1px);
+      opacity: 0.92;
+    }
+
+    .tab-button {
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--ink-muted);
+      padding: 0.6rem 0.85rem;
+      font-size: 0.86rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tab-button.is-active {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+      box-shadow: 0 8px 22px rgba(32, 35, 31, 0.08);
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .engine-check {
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      gap: 0.55rem;
+      min-height: 42px;
+      padding: 0.6rem 0.7rem;
+    }
+
+    .code-block {
+      background: #16211f;
+      border-radius: 8px;
+      color: #d7fff6;
+      overflow-x: auto;
+      padding: 1rem;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .code-block {
+        background: #0d1110;
+      }
     }
   </style>
 </head>
-<body class="flex h-full flex-col">
-  <div class="flex w-full flex-col">
+<body class="min-h-full">
+  <div class="min-h-screen">
     <!-- 主内容区域 -->
-    <div class="relative flex w-full flex-col bg-white ring-1 ring-zinc-100 dark:bg-zinc-900 dark:ring-zinc-300/20">
+    <div class="min-h-screen">
       <main class="flex-auto">
-        <div class="sm:px-8 mt-16 sm:mt-32">
+        <div class="px-4 py-6 sm:px-6 lg:px-8">
           <div class="mx-auto w-full max-w-7xl lg:px-8">
-            <div class="relative px-4 sm:px-8 lg:px-12">
-              <div class="mx-auto max-w-2xl lg:max-w-5xl">
+            <div class="relative">
+              <div class="mx-auto flex max-w-6xl flex-col">
 
                 <!-- 标题区域 -->
-                <div class="max-w-2xl">
-                  <div class="text-6xl mb-6">🔍</div>
-                  <h1 class="text-4xl font-bold tracking-tight text-zinc-800 sm:text-5xl dark:text-zinc-100">
+                <div class="order-1 flex flex-col gap-4 border-b border-[var(--line)] pb-5 lg:flex-row lg:items-end lg:justify-between">
+                  <div class="max-w-2xl">
+                  <div class="mb-3 inline-flex rounded-lg border border-[var(--line)] bg-[var(--surface-muted)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-strong)]">Search Gateway</div>
+                  <h1 class="text-3xl font-black tracking-tight text-[var(--ink)] sm:text-4xl">
                     Cloudflare Search
                   </h1>
-                  <div class="mt-6 text-base text-zinc-600 dark:text-zinc-400">
+                  <div class="mt-3 max-w-xl text-sm leading-6 text-[var(--ink-muted)]">
                     <p class="">
                       基于 Cloudflare Workers 的生产级搜索网关。优先使用 Startpage，结果不足或失败时按 DuckDuckGo、Brave、Mojeek、Bing 顺序兜底。
                     </p>
-                    <p class="mt-2">
+                    <p class="mt-1">
                       如果这个项目对你有帮助，可以 
                       <a
                         href="https://yrobot.top/donate_wx.jpeg"
                         target="_blank"
                         title="如果这个项目对你有帮助，可以请我喝杯咖啡 ☕"
-                        class="hover:underline"
+                        class="font-semibold text-[var(--accent-strong)] hover:underline"
                       >
                         请作者喝杯咖啡 ☕️
                       </a>
                     </p>
                   </div>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2 text-xs text-[var(--ink-muted)] sm:grid-cols-4 lg:grid-cols-2">
+                    <div class="muted-panel px-3 py-2"><span class="block font-bold text-[var(--ink)]">7</span> 搜索引擎</div>
+                    <div class="muted-panel px-3 py-2"><span class="block font-bold text-[var(--ink)]">KV</span> 限流状态</div>
+                    <div class="muted-panel px-3 py-2"><span class="block font-bold text-[var(--ink)]">API</span> GET/POST</div>
+                    <div class="muted-panel px-3 py-2"><span class="block font-bold text-[var(--ink)]">MCP</span> AI 工具</div>
+                  </div>
                 </div>
 
                 <!-- 服务状态 -->
-                <div class="mt-8 rounded-2xl border ${
-                  TOKEN_ENABLED
-                    ? "border-green-200 bg-green-50 dark:border-green-800/40 dark:bg-green-900/10"
-                    : "border-amber-200 bg-amber-50 dark:border-amber-800/40 dark:bg-amber-900/10"
-                } p-6">
-                  <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-3">
-                    ⚙️ 服务配置状态
+                <div class="order-5 panel mt-5 border-l-4 ${
+                  TOKEN_CONFIGURED
+                    ? "border-l-teal-600"
+                    : AUTH_REQUIRED
+                      ? "border-l-red-600"
+                      : "border-l-amber-600"
+                } p-5">
+                  <h2 class="mb-3 text-sm font-bold text-[var(--ink)]">
+                    服务配置状态
                   </h2>
                   <div class="space-y-2 text-sm">
                     <div class="flex items-center justify-between">
-                      <span class="text-zinc-700 dark:text-zinc-300">访问鉴权</span>
+                      <span class="text-[var(--ink-muted)]">访问鉴权</span>
                       <span class="${
-                        TOKEN_ENABLED
+                        TOKEN_CONFIGURED
                           ? "text-green-600 dark:text-green-400"
-                          : "text-zinc-500 dark:text-zinc-500"
+                          : AUTH_REQUIRED
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-zinc-500 dark:text-zinc-500"
                       }">
-                        ${TOKEN_ENABLED ? "✓ 已启用" : "○ 未启用 (公开访问)"}
+                        ${
+                          TOKEN_CONFIGURED
+                            ? "✓ 已启用"
+                            : AUTH_REQUIRED
+                              ? "⚠ 需要配置 TOKEN"
+                              : "○ 未启用 (公开访问)"
+                        }
                       </span>
                     </div>
                     <div class="flex items-center justify-between">
-                      <span class="text-zinc-700 dark:text-zinc-300">无 Key 引擎 (Bing/Startpage/Mojeek/DuckDuckGo/Brave)</span>
-                      <span class="text-green-600 dark:text-green-400">✓ 可用</span>
+                      <span class="text-[var(--ink-muted)]">无 Key 引擎</span>
+                      <span class="text-[var(--accent-strong)]">Bing / Startpage / Mojeek / DuckDuckGo / Brave</span>
                     </div>
                   </div>
                   ${
-                    !TOKEN_ENABLED
+                    AUTH_REQUIRED && !TOKEN_CONFIGURED
+                      ? `
+                  <div class="mt-4 pt-4 border-t border-red-200 dark:border-red-800/40">
+                    <p class="text-xs text-red-700 dark:text-red-400">
+                      当前配置要求鉴权，但还没有配置 <code class="px-1 py-0.5 bg-red-100 dark:bg-red-900/30 rounded">TOKEN</code> secret。请先运行 <code class="px-1 py-0.5 bg-red-100 dark:bg-red-900/30 rounded">wrangler secret put TOKEN</code>。
+                    </p>
+                  </div>
+                  `
+                      : !TOKEN_ENABLED
                       ? `
                   <div class="mt-4 pt-4 border-t border-amber-200 dark:border-amber-800/40">
                     <p class="text-xs text-amber-700 dark:text-amber-400">
-                      💡 建议:为防止服务被滥用,建议在 Cloudflare Dashboard 的 Worker 设置中添加环境变量 <code class="px-1 py-0.5 ${
+                      💡 建议:为防止服务被滥用,建议配置 <code class="px-1 py-0.5 ${
                         "bg-amber-100 dark:bg-amber-900/30"
-                      } rounded">TOKEN</code> 启用访问鉴权。
+                      } rounded">TOKEN</code> secret 启用访问鉴权。
                     </p>
                   </div>
                   `
@@ -150,14 +285,14 @@ export function getSearchHtml() {
                 </div>
 
                 <!-- Cloudflare 访问者区域 -->
-                <div class="mt-8 rounded-2xl border border-zinc-100 p-6 dark:border-zinc-700/40">
+                <div class="order-6 panel mt-4 p-5">
                   <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                        🌐 Cloudflare 识别的访问者区域
+                        Cloudflare 识别的访问者区域
                       </h2>
                       <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                        这里显示 Cloudflare <code>request.cf</code> 返回的位置，用于解释 <code>location=auto</code> 的来源。
+                        由 <code>request.cf</code> 返回，用于解释 <code>location=auto</code>。
                       </p>
                     </div>
                     <span id="geoStatusBadge" class="inline-flex w-fit items-center rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
@@ -171,15 +306,15 @@ export function getSearchHtml() {
                 </div>
 
                 <!-- 搜索表单 -->
-                <div class="mt-8 rounded-2xl border border-zinc-100 p-6 dark:border-zinc-700/40">
-                  <h2 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-                    🔍 开始搜索
+                <div class="order-2 panel mt-4 p-5">
+                  <h2 class="mb-4 text-sm font-bold text-[var(--ink)]">
+                    开始搜索
                   </h2>
                   <form id="searchForm" class="space-y-4">
                     ${
                       TOKEN_ENABLED
                         ? `
-                    <div class="rounded-2xl border border-blue-200 bg-blue-50/80 p-4 dark:border-blue-800/40 dark:bg-blue-900/10">
+                    <div class="muted-panel p-4">
                       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <label for="tokenInput" class="block text-sm font-medium text-zinc-900 dark:text-zinc-100">
@@ -199,12 +334,12 @@ export function getSearchHtml() {
                           id="tokenInput"
                           placeholder="输入 Bearer Token"
                           autocomplete="off"
-                          class="flex-1 rounded-md bg-white px-4 py-2 text-sm text-zinc-900 shadow-sm ring-1 ring-inset ring-zinc-300 placeholder:text-zinc-400 focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:text-zinc-100 dark:ring-zinc-700 dark:placeholder:text-zinc-500"
+                          class="field flex-1"
                         >
                         <button
                           type="button"
                           id="verifyTokenBtn"
-                          class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                          class="action-btn"
                         >
                           验证 Token
                         </button>
@@ -223,7 +358,7 @@ export function getSearchHtml() {
                         id="searchQuery"
                         placeholder="输入您要搜索的内容..."
                         required
-                        class="w-full rounded-md bg-white px-4 py-2 text-sm text-zinc-900 shadow-sm ring-1 ring-inset ring-zinc-300 placeholder:text-zinc-400 focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:text-zinc-100 dark:ring-zinc-700 dark:placeholder:text-zinc-500"
+                        class="field"
                       >
                     </div>
 
@@ -236,7 +371,7 @@ export function getSearchHtml() {
                         id="locationInput"
                         value="auto"
                         placeholder="auto / 上海 / off"
-                        class="w-full rounded-md bg-white px-4 py-2 text-sm text-zinc-900 shadow-sm ring-1 ring-inset ring-zinc-300 placeholder:text-zinc-400 focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:text-zinc-100 dark:ring-zinc-700 dark:placeholder:text-zinc-500"
+                        class="field"
                       >
                       <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
                         默认 <code>auto</code>，会使用 Cloudflare 提供的访问者城市/地区；传 <code>off</code> 可关闭。
@@ -247,44 +382,44 @@ export function getSearchHtml() {
                       <label class="block text-sm font-medium text-zinc-900 dark:text-zinc-100 mb-2">
                         选择搜索引擎 (可多选)
                       </label>
-                      <div class="grid grid-cols-2 gap-2">
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="startpage" ${handlerEngineDefaultChecked(
                             "startpage"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">Startpage</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="duckduckgo" ${handlerEngineDefaultChecked(
                             "duckduckgo"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">DuckDuckGo</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="brave" ${handlerEngineDefaultChecked(
                             "brave"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">Brave</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="qwant" ${handlerEngineDefaultChecked(
                             "qwant"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">Qwant</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="yahoo" ${handlerEngineDefaultChecked(
                             "yahoo"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">Yahoo</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="mojeek" ${handlerEngineDefaultChecked(
                             "mojeek"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
                           <span class="text-sm text-zinc-700 dark:text-zinc-300">Mojeek</span>
                         </label>
-                        <label class="flex items-center space-x-2 cursor-pointer">
+                        <label class="engine-check">
                           <input type="checkbox" name="engine" value="bing" ${handlerEngineDefaultChecked(
                             "bing"
                           )} class="rounded text-blue-500 focus:ring-blue-500">
@@ -296,7 +431,7 @@ export function getSearchHtml() {
                     <button
                       type="submit"
                       id="searchBtn"
-                      class="w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:bg-blue-500 dark:hover:bg-blue-400"
+                      class="action-btn w-full"
                     >
                       开始搜索
                     </button>
@@ -305,13 +440,13 @@ export function getSearchHtml() {
                 </div>
 
                 <!-- 搜索结果区域 -->
-                <div id="resultsSection" class="mt-8 hidden">
-                  <div class="rounded-2xl border border-zinc-100 p-6 dark:border-zinc-700/40">
+                <div id="resultsSection" class="order-3 mt-5 hidden">
+                  <div class="panel p-5">
                     <div class="flex items-center justify-between mb-4">
                       <h2 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                         搜索结果 <span id="resultCount" class="text-sm font-normal text-zinc-500"></span>
                       </h2>
-                      <button id="clearBtn" class="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+                      <button id="clearBtn" class="text-sm font-semibold text-[var(--accent-strong)] hover:underline">
                         清除结果
                       </button>
                     </div>
@@ -319,28 +454,36 @@ export function getSearchHtml() {
                   </div>
                 </div>
 
-                <!-- API 使用说明 -->
-                <div class="mt-8 rounded-2xl border border-zinc-100 p-6 dark:border-zinc-700/40">
-                  <h2 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-                    📖 如何使用 API
+                <div class="order-4 mt-5">
+                  <div class="flex gap-2 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--surface-muted)] p-1" role="tablist" aria-label="Cloudflare Search details">
+                    <button type="button" class="tab-button is-active" data-tab-target="api" role="tab" aria-selected="true">API</button>
+                    <button type="button" class="tab-button" data-tab-target="engines" role="tab" aria-selected="false">引擎</button>
+                    <button type="button" class="tab-button" data-tab-target="deploy" role="tab" aria-selected="false">部署</button>
+                    <button type="button" class="tab-button" data-tab-target="mcp" role="tab" aria-selected="false">MCP</button>
+                  </div>
+
+                  <!-- API 使用说明 -->
+                  <section class="tab-panel panel mt-3 p-5" data-tab-panel="api" role="tabpanel">
+                  <h2 class="mb-4 text-lg font-bold text-[var(--ink)]">
+                    如何使用 API
                   </h2>
                   <p class="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
                     除了网页界面,您还可以通过 HTTP 请求直接调用搜索 API。支持 GET 和 POST 两种方式。
                   </p>
-                  <div class="space-y-4 text-sm">
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                  <div class="grid gap-4 text-sm lg:grid-cols-2">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">GET 请求示例</div>
                         <span class="text-xs text-zinc-500 dark:text-zinc-400">适合快速测试</span>
                       </div>
-                      <code class="text-xs text-blue-600 dark:text-blue-400 break-all block" id="apiExample1"></code>
+                      <code class="block break-all text-xs text-[var(--accent-strong)]" id="apiExample1"></code>
                     </div>
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">POST 请求示例</div>
                         <span class="text-xs text-zinc-500 dark:text-zinc-400">适合程序调用</span>
                       </div>
-                      <code class="text-xs text-blue-600 dark:text-blue-400 break-all block whitespace-pre-wrap" id="apiExample2"></code>
+                      <code class="block whitespace-pre-wrap break-all text-xs text-[var(--accent-strong)]" id="apiExample2"></code>
                     </div>
                     ${
                       TOKEN_ENABLED
@@ -398,43 +541,43 @@ export function getSearchHtml() {
                       </div>
                     </div>
                   </div>
-                </div>
+                  </section>
 
                 <!-- 支持的搜索引擎 -->
-                <div class="mt-8 rounded-2xl border border-zinc-100 p-6 dark:border-zinc-700/40">
-                  <h2 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-                    🚀 支持的搜索引擎
+                  <section class="tab-panel panel mt-3 p-5" data-tab-panel="engines" role="tabpanel" hidden>
+                  <h2 class="mb-4 text-lg font-bold text-[var(--ink)]">
+                    支持的搜索引擎
                   </h2>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">Bing</div>
                         <span class="text-xs text-green-600 dark:text-green-400">兜底</span>
                       </div>
                       <p class="text-xs text-zinc-600 dark:text-zinc-400">作为最后一层补充来源，避免单一引擎结果质量波动</p>
                     </div>
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">Startpage</div>
                         <span class="text-xs text-green-600 dark:text-green-400">默认优先</span>
                       </div>
                       <p class="text-xs text-zinc-600 dark:text-zinc-400">当前默认首选来源，结果质量更稳定，适合作为主入口</p>
                     </div>
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">Mojeek</div>
                         <span class="text-xs text-green-600 dark:text-green-400">补充来源</span>
                       </div>
                       <p class="text-xs text-zinc-600 dark:text-zinc-400">页面结构简单，作为独立索引补充来源</p>
                     </div>
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">DuckDuckGo</div>
                         <span class="text-xs text-green-600 dark:text-green-400">高优先级</span>
                       </div>
                       <p class="text-xs text-zinc-600 dark:text-zinc-400">注重隐私保护的搜索引擎,无需配置</p>
                     </div>
-                    <div class="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                    <div class="muted-panel p-4">
                       <div class="flex items-center justify-between mb-2">
                         <div class="font-medium text-zinc-900 dark:text-zinc-100">Brave Search</div>
                         <span class="text-xs text-green-600 dark:text-green-400">高优先级</span>
@@ -442,12 +585,12 @@ export function getSearchHtml() {
                       <p class="text-xs text-zinc-600 dark:text-zinc-400">独立的搜索引擎，直接解析 HTML，已移除 eval</p>
                     </div>
                   </div>
-                </div>
+                  </section>
 
                 <!-- 快速开始指南 -->
-                <div class="mt-8 rounded-2xl border border-blue-200 bg-blue-50 dark:border-blue-800/40 dark:bg-blue-900/10 p-6">
-                  <h2 class="text-lg font-semibold text-blue-900 dark:text-blue-100 mb-4">
-                    ⚡ 快速开始
+                  <section class="tab-panel panel mt-3 p-5" data-tab-panel="deploy" role="tabpanel" hidden>
+                  <h2 class="mb-4 text-lg font-bold text-[var(--ink)]">
+                    快速开始
                   </h2>
                   <div class="space-y-3 text-sm text-blue-800 dark:text-blue-200">
                     <div class="flex items-start">
@@ -486,12 +629,12 @@ export function getSearchHtml() {
                       📚 更多配置说明请查看 <a href="https://github.com/Yrobot/cloudflare-search#readme" target="_blank" class="underline hover:text-blue-900 dark:hover:text-blue-100">GitHub README</a>
                     </p>
                   </div>
-                </div>
+                  </section>
 
                 <!-- MCP 集成 -->
-                <div class="mt-8 rounded-2xl border border-purple-200 bg-purple-50 dark:border-purple-800/40 dark:bg-purple-900/10 p-6">
-                  <h2 class="text-lg font-semibold text-purple-900 dark:text-purple-100 mb-4">
-                    🤖 MCP 集成
+                  <section class="tab-panel panel mt-3 p-5" data-tab-panel="mcp" role="tabpanel" hidden>
+                  <h2 class="mb-4 text-lg font-bold text-[var(--ink)]">
+                    MCP 集成
                   </h2>
                   <p class="text-sm text-purple-800 dark:text-purple-200 mb-4">
                     通过 MCP (Model Context Protocol) 让 AI 助手 (如 Claude) 直接调用你的搜索服务,获取实时搜索结果。
@@ -499,7 +642,7 @@ export function getSearchHtml() {
 
                   <div class="space-y-4">
                     <!-- 步骤 1 -->
-                    <div class="rounded-lg bg-white dark:bg-purple-900/20 p-4 border border-purple-200 dark:border-purple-800/40">
+                    <div class="muted-panel p-4">
                       <div class="flex items-start">
                         <span class="flex-shrink-0 w-6 h-6 bg-purple-200 dark:bg-purple-800 text-purple-900 dark:text-purple-100 rounded-full flex items-center justify-center text-xs font-semibold mr-3">1</span>
                         <div class="flex-1">
@@ -512,15 +655,15 @@ export function getSearchHtml() {
                             <p><strong>Claude Desktop (macOS):</strong> <code class="px-1 py-0.5 bg-purple-100 dark:bg-purple-900/30 rounded">~/Library/Application Support/Claude/claude_desktop_config.json</code></p>
                             <p><strong>Claude Desktop (Windows):</strong> <code class="px-1 py-0.5 bg-purple-100 dark:bg-purple-900/30 rounded">%APPDATA%\\Claude\\claude_desktop_config.json</code></p>
                           </div>
-                          <div class="rounded bg-purple-100 dark:bg-purple-900/30 p-3">
-                            <pre class="text-xs overflow-x-auto text-purple-900 dark:text-purple-100"><code id='mcp-config-json'></code></pre>
+                          <div class="code-block">
+                            <pre class="text-xs"><code id="mcp-config-json"></code></pre>
                           </div>
                         </div>
                       </div>
                     </div>
 
                     <!-- 步骤 2 -->
-                    <div class="rounded-lg bg-white dark:bg-purple-900/20 p-4 border border-purple-200 dark:border-purple-800/40">
+                    <div class="muted-panel p-4">
                       <div class="flex items-start">
                         <span class="flex-shrink-0 w-6 h-6 bg-purple-200 dark:bg-purple-800 text-purple-900 dark:text-purple-100 rounded-full flex items-center justify-center text-xs font-semibold mr-3">2</span>
                         <div class="flex-1">
@@ -533,7 +676,7 @@ export function getSearchHtml() {
                     </div>
 
                     <!-- 步骤 3 -->
-                    <div class="rounded-lg bg-white dark:bg-purple-900/20 p-4 border border-purple-200 dark:border-purple-800/40">
+                    <div class="muted-panel p-4">
                       <div class="flex items-start">
                         <span class="flex-shrink-0 w-6 h-6 bg-purple-200 dark:bg-purple-800 text-purple-900 dark:text-purple-100 rounded-full flex items-center justify-center text-xs font-semibold mr-3">3</span>
                         <div class="flex-1">
@@ -547,7 +690,7 @@ export function getSearchHtml() {
                     </div>
 
                     <!-- 使用示例 -->
-                    <div class="rounded-lg bg-white dark:bg-purple-900/20 p-4 border border-purple-200 dark:border-purple-800/40">
+                    <div class="muted-panel p-4">
                       <p class="text-sm font-medium text-purple-900 dark:text-purple-100 mb-2">💬 使用示例</p>
                       <div class="space-y-2 text-xs text-purple-700 dark:text-purple-300">
                         <div class="rounded bg-purple-100 dark:bg-purple-900/30 p-2">
@@ -567,10 +710,11 @@ export function getSearchHtml() {
                       📚 MCP 文档: <a href="https://modelcontextprotocol.io" target="_blank" class="underline hover:text-purple-900 dark:hover:text-purple-100">modelcontextprotocol.io</a>
                     </p>
                   </div>
+                  </section>
                 </div>
 
                 <!-- 功能特性 -->
-                <div class="mt-16 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div class="order-7 mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
                   <div class="flex items-center text-sm text-zinc-600 dark:text-zinc-400">
                     <svg class="w-5 h-5 mr-2 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
                       <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -638,6 +782,8 @@ export function getSearchHtml() {
     const currentOrigin = window.location.origin;
     const TOKEN_ENABLED = ${TOKEN_ENABLED};
     const tokenStorageKey = 'cloudflare-search-token';
+    const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
+    const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
     const urlParams = new URLSearchParams(window.location.search);
     const tokenInput = document.getElementById('tokenInput');
     const locationInput = document.getElementById('locationInput');
@@ -657,6 +803,24 @@ export function getSearchHtml() {
     if (locationInput) {
       locationInput.value = urlParams.get('location') || 'auto';
     }
+
+    function activateTab(tabName) {
+      tabButtons.forEach((button) => {
+        const active = button.dataset.tabTarget === tabName;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+
+      tabPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.tabPanel !== tabName;
+      });
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        activateTab(button.dataset.tabTarget);
+      });
+    });
 
     function getCurrentToken() {
       return tokenInput ? tokenInput.value.trim() : '';
@@ -724,6 +888,39 @@ export function getSearchHtml() {
       return value === undefined || value === null || value === '' ? '未知' : String(value);
     }
 
+    function clearChildren(element) {
+      if (!element) {
+        return;
+      }
+
+      while (element.firstChild) {
+        element.removeChild(element.firstChild);
+      }
+    }
+
+    function createElement(tagName, className, text) {
+      const element = document.createElement(tagName);
+
+      if (className) {
+        element.className = className;
+      }
+
+      if (text !== undefined) {
+        element.textContent = text;
+      }
+
+      return element;
+    }
+
+    function normalizeExternalUrl(value) {
+      try {
+        const url = new URL(String(value || ''), window.location.href);
+        return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
     function renderGeoDetails(geo) {
       if (!geoDetails) {
         return;
@@ -743,14 +940,19 @@ export function getSearchHtml() {
         ['网络组织', geo.as_organization],
       ];
 
-      geoDetails.innerHTML = items
-        .map(([label, value]) => \`
-          <div class="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
-            <dt class="text-zinc-500 dark:text-zinc-400">\${label}</dt>
-            <dd class="mt-1 break-all font-medium text-zinc-800 dark:text-zinc-100">\${formatGeoValue(value)}</dd>
-          </div>
-        \`)
-        .join('');
+      clearChildren(geoDetails);
+      items.forEach(([label, value]) => {
+        const item = createElement('div', 'rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50');
+        const term = createElement('dt', 'text-zinc-500 dark:text-zinc-400', label);
+        const description = createElement(
+          'dd',
+          'mt-1 break-all font-medium text-zinc-800 dark:text-zinc-100',
+          formatGeoValue(value)
+        );
+
+        item.append(term, description);
+        geoDetails.appendChild(item);
+      });
     }
 
     async function loadGeoInfo() {
@@ -777,7 +979,7 @@ export function getSearchHtml() {
         setGeoBadge('success', '已读取');
       } catch (error) {
         geoSummary.textContent = \`读取失败：\${error.message}\`;
-        geoDetails.innerHTML = '';
+        clearChildren(geoDetails);
         setGeoBadge('error', '读取失败');
       }
     }
@@ -961,24 +1163,56 @@ export function getSearchHtml() {
 
       resultsSection.classList.remove('hidden');
       resultCount.textContent = \`(共 \${data.number_of_results} 条)\`;
+      clearChildren(resultsContainer);
 
       if (data.results && data.results.length > 0) {
-        resultsContainer.innerHTML = data.results.map((result, index) => \`
-          <div class="rounded-lg bg-zinc-50 p-4 overflow-scroll dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition">
-            <div class="flex items-start justify-between">
-              <div class="flex-1 overflow-hidden">
-                <a href="\${result.url}" target="_blank" class="text-base font-medium text-blue-600 dark:text-blue-400 hover:underline">
-                  \${result.title || '无标题'}
-                </a>
-                <p class="text-xs text-zinc-500 dark:text-zinc-500 mt-1">\${result.url}</p>
-                <p class="text-sm text-zinc-700 dark:text-zinc-300 mt-2">\${result.description || '暂无描述'}</p>
-              </div>
-              <span class="ml-4 text-xs text-zinc-500 dark:text-zinc-500 bg-zinc-200 dark:bg-zinc-700 px-2 py-1 rounded">\${result.engine}</span>
-            </div>
-          </div>
-        \`).join('');
+        data.results.forEach((result) => {
+          const safeUrl = normalizeExternalUrl(result.url);
+          const item = createElement(
+            'div',
+            'rounded-lg bg-zinc-50 p-4 overflow-scroll dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition'
+          );
+          const row = createElement('div', 'flex items-start justify-between');
+          const body = createElement('div', 'flex-1 overflow-hidden');
+          const title = createElement(
+            'a',
+            'text-base font-medium text-blue-600 dark:text-blue-400 hover:underline',
+            result.title || '无标题'
+          );
+          const urlText = createElement(
+            'p',
+            'text-xs text-zinc-500 dark:text-zinc-500 mt-1',
+            safeUrl || String(result.url || '')
+          );
+          const description = createElement(
+            'p',
+            'text-sm text-zinc-700 dark:text-zinc-300 mt-2',
+            result.description || '暂无描述'
+          );
+          const engine = createElement(
+            'span',
+            'ml-4 text-xs text-zinc-500 dark:text-zinc-500 bg-zinc-200 dark:bg-zinc-700 px-2 py-1 rounded',
+            result.engine || 'unknown'
+          );
+
+          if (safeUrl) {
+            title.href = safeUrl;
+            title.target = '_blank';
+            title.rel = 'noopener noreferrer';
+          } else {
+            title.href = '#';
+            title.setAttribute('aria-disabled', 'true');
+          }
+
+          body.append(title, urlText, description);
+          row.append(body, engine);
+          item.appendChild(row);
+          resultsContainer.appendChild(item);
+        });
       } else {
-        resultsContainer.innerHTML = '<p class="text-center text-zinc-500 dark:text-zinc-400">没有找到相关结果</p>';
+        resultsContainer.appendChild(
+          createElement('p', 'text-center text-zinc-500 dark:text-zinc-400', '没有找到相关结果')
+        );
       }
 
       // 滚动到结果区域
@@ -988,7 +1222,7 @@ export function getSearchHtml() {
     // 清除结果
     document.getElementById('clearBtn').addEventListener('click', function() {
       document.getElementById('resultsSection').classList.add('hidden');
-      document.getElementById('results').innerHTML = '';
+      clearChildren(document.getElementById('results'));
       setMessage(searchStatus, 'info', '');
     });
   </script>

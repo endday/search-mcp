@@ -400,13 +400,15 @@ curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
 | `HEALTH_STATE_TTL_SECONDS` | `string` | `"3600"` | 引擎健康状态在 KV 中的保留时间（秒）          |
 | `CORS_ALLOWED_ORIGINS` | `string`/`array` | `*` | 允许发起浏览器请求的来源；设置具体域名可收紧 CORS |
 | `CORS_ALLOWED_HEADERS` | `string`/`array` | `Authorization,Content-Type,x-api-key` | 允许的 CORS 请求头 |
+| `AUTH_REQUIRED` | `string` | `"false"` | 设置为 `"true"` 后，如果没有配置 `TOKEN`，受保护接口会 fail closed |
 | `TOKEN`           | `string` | `null`   | 访问令牌，配置后启用鉴权，保护服务不被滥用        |
 | `CF_BROWSER_RENDERING_ACCOUNT_ID` | `string` | `null` | `/markdown` 使用的 Cloudflare account ID |
 | `CF_BROWSER_RENDERING_API_TOKEN` | `string` | `null` | `/markdown` 使用的 Browser Rendering - Edit 权限 API token |
 
 **注意**：
 
-- `TOKEN` 配置后，所有请求都需要提供有效的 token
+- 公开部署建议设置 `AUTH_REQUIRED = "true"`，并用 `wrangler secret put TOKEN` 配置访问令牌
+- `TOKEN` 配置后，受保护接口需要提供有效的 token
 - `/markdown` 会消耗 Cloudflare Browser Rendering 配额；公开部署时建议开启 `TOKEN`
 - 绑定 `SEARCH_STATE_KV` 后，限流计数和引擎健康度会跨 isolate 共享；KV 写入是最终一致，不是强原子限流
 - 绑定 `SEARCH_KV` 后即可启用跨请求缓存；若实时请求失败且 stale 缓存仍在有效期，会返回 stale 结果
@@ -428,7 +430,7 @@ STALE_CACHE_TTL_SECONDS = "1800"
 RATE_LIMIT_MAX_REQUESTS = "60"
 HEALTH_STATE_TTL_SECONDS = "3600"
 CORS_ALLOWED_ORIGINS = "https://app.example.com"
-TOKEN = "your-secret-token-here"
+AUTH_REQUIRED = "true"
 CF_BROWSER_RENDERING_ACCOUNT_ID = "your-account-id"
 CF_BROWSER_RENDERING_API_TOKEN = "your-browser-rendering-api-token"
 
@@ -439,6 +441,12 @@ id = "your-kv-namespace-id"
 [[kv_namespaces]]
 binding = "SEARCH_STATE_KV"
 id = "your-state-kv-namespace-id"
+```
+
+真实访问令牌不要写入 `wrangler.toml`。请使用：
+
+```bash
+wrangler secret put TOKEN
 ```
 
 #### 方式 2: Cloudflare Dashboard
@@ -521,10 +529,11 @@ const byEngine = data.results.reduce((acc, result) => {
 
 #### 启用鉴权
 
-1. 配置 `TOKEN` 环境变量 来保护你的服务不被滥用：
+1. 配置 `TOKEN` secret 来保护你的服务不被滥用：
 
-- 利用 wrangler.toml 配置 TOKEN 环境变量
-- 通过 Cloudflare Worker Dashboard 配置 TOKEN 环境变量
+- 推荐使用 `wrangler secret put TOKEN`
+- 或通过 Cloudflare Worker Dashboard 配置加密 secret
+- `wrangler.toml` 中保留 `AUTH_REQUIRED = "true"`，避免忘记配置 token 时公开服务
 
 2. 在请求时传入 token：
 
@@ -582,11 +591,12 @@ A: 默认顺序如下：
 
 ### Q: 如何保护服务不被滥用？
 
-A: 建议配置 `TOKEN` 环境变量启用鉴权：
+A: 建议配置 `TOKEN` secret 启用鉴权：
 
-1. 在 `wrangler.toml` 中设置 `TOKEN = "your-random-token"`
-2. 或在 Cloudflare Dashboard 的 Environment Variables 中添加
-3. 配置后所有请求都需要提供有效的 token
+1. 运行 `wrangler secret put TOKEN`
+2. 保留 `wrangler.toml` 中的 `AUTH_REQUIRED = "true"`
+3. 或在 Cloudflare Dashboard 的 Environment Variables 中添加加密 secret
+4. 配置后受保护接口都需要提供有效的 token
 
 鉴权失败会返回 401 错误
 

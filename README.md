@@ -398,13 +398,15 @@ curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
 | `HEALTH_STATE_TTL_SECONDS` | `string` | `"3600"` | Retention time for engine health state in KV |
 | `CORS_ALLOWED_ORIGINS` | `string`/`array` | `*` | Allowed browser origins; set specific origins to restrict CORS |
 | `CORS_ALLOWED_HEADERS` | `string`/`array` | `Authorization,Content-Type,x-api-key` | Allowed CORS request headers |
+| `AUTH_REQUIRED` | `string` | `"false"` | Set to `"true"` to fail closed when `TOKEN` has not been configured |
 | `TOKEN` | `string` | `null` | Access token. Enables auth when configured to prevent abuse |
 | `CF_BROWSER_RENDERING_ACCOUNT_ID` | `string` | `null` | Cloudflare account ID used by `/markdown` |
 | `CF_BROWSER_RENDERING_API_TOKEN` | `string` | `null` | API token with Browser Rendering - Edit permission used by `/markdown` |
 
 **Notes**:
 
-- After `TOKEN` is configured, all requests must provide a valid token
+- For public deployments, keep `AUTH_REQUIRED = "true"` and configure the token with `wrangler secret put TOKEN`
+- After `TOKEN` is configured, protected endpoints must provide a valid token
 - `/markdown` consumes Cloudflare Browser Rendering quota; keep `TOKEN` enabled on public deployments
 - Bind `SEARCH_STATE_KV` to share rate-limit counters and engine health across isolates; KV writes are eventually consistent, not strict atomic counters
 - Bind a KV namespace named `SEARCH_KV` to enable response caching; stale cache can still be returned if live upstream search fails
@@ -426,7 +428,7 @@ STALE_CACHE_TTL_SECONDS = "1800"
 RATE_LIMIT_MAX_REQUESTS = "60"
 HEALTH_STATE_TTL_SECONDS = "3600"
 CORS_ALLOWED_ORIGINS = "https://app.example.com"
-TOKEN = "your-secret-token-here"
+AUTH_REQUIRED = "true"
 CF_BROWSER_RENDERING_ACCOUNT_ID = "your-account-id"
 CF_BROWSER_RENDERING_API_TOKEN = "your-browser-rendering-api-token"
 
@@ -437,6 +439,12 @@ id = "your-kv-namespace-id"
 [[kv_namespaces]]
 binding = "SEARCH_STATE_KV"
 id = "your-state-kv-namespace-id"
+```
+
+Do not put the real access token in `wrangler.toml`. Use:
+
+```bash
+wrangler secret put TOKEN
 ```
 
 #### Method 2: Cloudflare Dashboard
@@ -523,10 +531,11 @@ With MCP (Model Context Protocol), AI assistants can directly call your search s
 
 #### Enable Authentication
 
-1. Configure the `TOKEN` environment variable to protect your service from abuse:
+1. Configure the `TOKEN` secret to protect your service from abuse:
 
-- Configure `TOKEN` in `wrangler.toml`
-- Configure `TOKEN` in Cloudflare Worker Dashboard
+- Prefer `wrangler secret put TOKEN`
+- Or configure an encrypted secret in Cloudflare Worker Dashboard
+- Keep `AUTH_REQUIRED = "true"` in `wrangler.toml` to avoid an accidental public deployment
 
 2. Pass token in requests:
 
@@ -584,11 +593,12 @@ If the primary engine is still slow after `HEDGED_FALLBACK_DELAY_MS`, the gatewa
 
 ### Q: How can I protect the service from abuse?
 
-A: It is recommended to configure the `TOKEN` environment variable to enable authentication:
+A: It is recommended to configure the `TOKEN` secret to enable authentication:
 
-1. Set `TOKEN = "your-random-token"` in `wrangler.toml`
-2. Or add it in Environment Variables in Cloudflare Dashboard
-3. After configuration, all requests must provide a valid token
+1. Run `wrangler secret put TOKEN`
+2. Keep `AUTH_REQUIRED = "true"` in `wrangler.toml`
+3. Or add an encrypted secret in Cloudflare Worker Dashboard
+4. After configuration, protected endpoints must provide a valid token
 
 Authentication failure returns a 401 error.
 

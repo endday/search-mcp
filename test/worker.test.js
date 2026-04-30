@@ -136,7 +136,9 @@ function installBrowserRenderingStub(handler) {
       requestUrl.hostname !== "api.cloudflare.com" ||
       !requestUrl.pathname.endsWith("/browser-rendering/markdown")
     ) {
-      throw new Error(`Unhandled fetch URL: ${url}`);
+      return new Response(null, {
+        status: 204,
+      });
     }
 
     const body = init.body ? JSON.parse(init.body) : null;
@@ -361,6 +363,43 @@ test("rejects private network markdown targets", async () => {
   assert.equal(payload.code, "INVALID_URL");
 });
 
+test("rejects markdown targets that redirect to private networks", async () => {
+  let browserRenderingCalls = 0;
+
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    if (requestUrl.hostname === "api.cloudflare.com") {
+      browserRenderingCalls += 1;
+      return new Response(JSON.stringify({ success: true, result: "" }));
+    }
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: "http://127.0.0.1/admin",
+      },
+    });
+  };
+
+  const response = await worker.fetch(
+    createSearchRequest("/markdown?url=https%3A%2F%2Fexample.com%2Fstart", {
+      headers: {
+        Authorization: "Bearer secret",
+      },
+    }),
+    createEnv({
+      TOKEN: "secret",
+      CF_BROWSER_RENDERING_ACCOUNT_ID: "account-id",
+      CF_BROWSER_RENDERING_API_TOKEN: "browser-token",
+    })
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.code, "INVALID_URL");
+  assert.equal(browserRenderingCalls, 0);
+});
+
 test("fetches and extracts readable content without browser rendering", async () => {
   const calls = installHtmlFetchStub(`<!doctype html>
     <html lang="zh-CN">
@@ -426,6 +465,44 @@ test("enforces content fetch response size limits", async () => {
 test("rejects private network content targets", async () => {
   const response = await worker.fetch(
     createSearchRequest("/content?url=http%3A%2F%2F192.168.1.10%2Fadmin"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.code, "INVALID_URL");
+});
+
+test("rejects IPv6 private and IPv4-mapped content targets", async () => {
+  const blockedTargets = [
+    "http://[fc00::1]/admin",
+    "http://[fe80::1]/admin",
+    "http://[::ffff:127.0.0.1]/admin",
+  ];
+
+  for (const target of blockedTargets) {
+    const response = await worker.fetch(
+      createSearchRequest(`/content?url=${encodeURIComponent(target)}`),
+      createEnv()
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.code, "INVALID_URL");
+  }
+});
+
+test("rejects content targets that redirect to private networks", async () => {
+  globalThis.fetch = async () =>
+    new Response(null, {
+      status: 302,
+      headers: {
+        location: "http://192.168.1.10/admin",
+      },
+    });
+
+  const response = await worker.fetch(
+    createSearchRequest("/content?url=https%3A%2F%2Fexample.com%2Fstart"),
     createEnv()
   );
   const payload = await response.json();
@@ -529,6 +606,24 @@ test("renders token input on homepage when auth is enabled", async () => {
   assert.match(html, /\/auth\/verify/);
   assert.match(html, /id="geoSummary"/);
   assert.match(html, /\/geo/);
+  assert.match(html, /data-tab-target="api"/);
+  assert.match(html, /data-tab-panel="mcp"/);
+  assert.doesNotMatch(html, /resultsContainer\.innerHTML\s*=\s*data\.results/);
+  assert.match(html, /document\.createElement/);
+});
+
+test("renders token input on homepage when auth is required by config", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/"),
+    createEnv({
+      AUTH_REQUIRED: "true",
+    })
+  );
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /id="tokenInput"/);
+  assert.match(html, /AUTH_REQUIRED is enabled|需要配置 TOKEN/);
 });
 
 test("handles JSON POST /search requests", async () => {
@@ -605,6 +700,19 @@ test("rejects requests without configured token", async () => {
 
   assert.equal(response.status, 401);
   assert.equal(payload.code, "UNAUTHORIZED");
+});
+
+test("fails closed when auth is required but token secret is missing", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/search?q=cloudflare"),
+    createEnv({
+      AUTH_REQUIRED: "true",
+    })
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(payload.code, "AUTH_TOKEN_NOT_CONFIGURED");
 });
 
 test("verifies valid token through auth endpoint", async () => {
