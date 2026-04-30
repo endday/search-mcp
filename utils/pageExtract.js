@@ -1,4 +1,5 @@
-import { extractFromHtml } from "@extractus/article-extractor";
+import { Readability } from "@mozilla/readability";
+import { DOMParser } from "linkedom/worker";
 
 import { cleanText, parseHtml } from "./html.js";
 
@@ -99,53 +100,10 @@ function pickBestCandidate(root) {
   return scoreCandidate(body);
 }
 
-function normalizeExtractedArticle(article, url) {
-  if (!article?.content) {
-    return null;
-  }
-
-  const text = cleanText(article.content);
-  const contentHtml = stripUnsafeHtml(article.content);
-
-  if (text.length < 80) {
-    return null;
-  }
-
-  return {
-    url: article.url || url,
-    source: "direct-fetch",
-    extractor: "article-extractor",
-    title: cleanText(article.title || ""),
-    description: cleanText(article.description || ""),
-    metadata: {
-      title: cleanText(article.title || ""),
-      description: cleanText(article.description || ""),
-      site_name: cleanText(article.source || ""),
-      author: cleanText(article.author || ""),
-      published_time: cleanText(article.published || ""),
-      image: article.image || "",
-      favicon: article.favicon || "",
-      type: article.type || "",
-      links: Array.isArray(article.links) ? article.links : [],
-      ttr: article.ttr || null,
-    },
-    html: contentHtml,
-    text,
-    excerpt: text.slice(0, 500),
-    stats: {
-      text_length: text.length,
-      html_length: contentHtml.length,
-      score: null,
-      link_density: null,
-      paragraph_count: (contentHtml.match(/<p\b/gi) || []).length,
-    },
-  };
-}
-
-function extractPageContentWithHeuristics(html, url) {
+function getPageMetadata(html) {
   const root = parseHtml(html);
 
-  const metadata = {
+  return {
     title:
       getMeta(root, 'meta[property="og:title"]') ||
       getMeta(root, 'meta[name="twitter:title"]') ||
@@ -165,6 +123,66 @@ function extractPageContentWithHeuristics(html, url) {
       getMeta(root, 'meta[name="twitter:image"]'),
     lang: root.querySelector("html")?.getAttribute("lang") || "",
   };
+}
+
+function extractWithReadability(html, url) {
+  const document = new DOMParser().parseFromString(html, "text/html");
+
+  if (url && document.head) {
+    const base = document.createElement("base");
+    base.setAttribute("href", url);
+    document.head.appendChild(base);
+  }
+
+  const article = new Readability(document, {
+    keepClasses: true,
+  }).parse();
+
+  if (!article?.content) {
+    return null;
+  }
+
+  return article;
+}
+
+function normalizeReadabilityArticle(article, metadata, url) {
+  const text = cleanText(article.textContent || article.content);
+  const contentHtml = stripUnsafeHtml(article.content);
+
+  if (text.length < 80) {
+    return null;
+  }
+
+  return {
+    url: article.url || url,
+    source: "direct-fetch",
+    extractor: "readability",
+    title: cleanText(article.title || metadata.title || ""),
+    description: cleanText(article.excerpt || metadata.description || ""),
+    metadata: {
+      ...metadata,
+      title: cleanText(article.title || metadata.title || ""),
+      description: cleanText(article.excerpt || metadata.description || ""),
+      site_name: cleanText(article.siteName || metadata.site_name || ""),
+      author: cleanText(article.byline || metadata.author || ""),
+      lang: article.lang || metadata.lang || "",
+    },
+    html: contentHtml,
+    text,
+    excerpt: text.slice(0, 500),
+    stats: {
+      text_length: text.length,
+      html_length: contentHtml.length,
+      score: null,
+      link_density: null,
+      paragraph_count: (contentHtml.match(/<p\b/gi) || []).length,
+    },
+  };
+}
+
+function extractPageContentWithHeuristics(html, url) {
+  const root = parseHtml(html);
+  const metadata = getPageMetadata(html);
 
   cleanTree(root);
 
@@ -194,8 +212,9 @@ function extractPageContentWithHeuristics(html, url) {
 
 export async function extractPageContent(html, url) {
   try {
-    const article = await extractFromHtml(html, url);
-    const extracted = normalizeExtractedArticle(article, url);
+    const metadata = getPageMetadata(html);
+    const article = extractWithReadability(html, url);
+    const extracted = normalizeReadabilityArticle(article, metadata, url);
 
     if (extracted) {
       return extracted;

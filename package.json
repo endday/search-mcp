@@ -41,8 +41,9 @@
     "url": "https://github.com/Yrobot/cloudflare-search.git"
   },
   "dependencies": {
-    "@extractus/article-extractor": "^8.0.20",
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.12",
     "node-html-parser": "^7.1.0"
   },
   "engines": {

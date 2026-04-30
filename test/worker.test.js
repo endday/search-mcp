@@ -393,7 +393,7 @@ test("fetches and extracts readable content without browser rendering", async ()
   assert.equal(response.status, 200);
   assert.equal(payload.url, "https://example.com/post");
   assert.equal(payload.source, "direct-fetch");
-  assert.ok(["article-extractor", "heuristic"].includes(payload.extractor));
+  assert.ok(["readability", "heuristic"].includes(payload.extractor));
   assert.equal(payload.title, "页面标题");
   assert.equal(payload.description, "页面摘要");
   assert.equal(payload.metadata.published_time, "2026-04-30");
@@ -445,7 +445,7 @@ test("keeps html endpoint as a content alias", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(payload.source, "direct-fetch");
-  assert.equal(payload.extractor, "heuristic");
+  assert.ok(["readability", "heuristic"].includes(payload.extractor));
   assert.match(payload.text, /Alias content/);
 });
 
