@@ -733,7 +733,7 @@ async function handleHtml(request, params, requestId) {
   }
 
   const html = await readResponseTextWithLimit(upstreamResponse, maxBytes);
-  const payload = extractPageContent(html, upstreamResponse.url || targetUrl);
+  const payload = await extractPageContent(html, upstreamResponse.url || targetUrl);
 
   return jsonResponse(
     request,

@@ -1,3 +1,5 @@
+import { extractFromHtml } from "@extractus/article-extractor";
+
 import { cleanText, parseHtml } from "./html.js";
 
 const NOISE_SELECTOR =
@@ -97,7 +99,50 @@ function pickBestCandidate(root) {
   return scoreCandidate(body);
 }
 
-export function extractPageContent(html, url) {
+function normalizeExtractedArticle(article, url) {
+  if (!article?.content) {
+    return null;
+  }
+
+  const text = cleanText(article.content);
+  const contentHtml = stripUnsafeHtml(article.content);
+
+  if (text.length < 80) {
+    return null;
+  }
+
+  return {
+    url: article.url || url,
+    source: "direct-fetch",
+    extractor: "article-extractor",
+    title: cleanText(article.title || ""),
+    description: cleanText(article.description || ""),
+    metadata: {
+      title: cleanText(article.title || ""),
+      description: cleanText(article.description || ""),
+      site_name: cleanText(article.source || ""),
+      author: cleanText(article.author || ""),
+      published_time: cleanText(article.published || ""),
+      image: article.image || "",
+      favicon: article.favicon || "",
+      type: article.type || "",
+      links: Array.isArray(article.links) ? article.links : [],
+      ttr: article.ttr || null,
+    },
+    html: contentHtml,
+    text,
+    excerpt: text.slice(0, 500),
+    stats: {
+      text_length: text.length,
+      html_length: contentHtml.length,
+      score: null,
+      link_density: null,
+      paragraph_count: (contentHtml.match(/<p\b/gi) || []).length,
+    },
+  };
+}
+
+function extractPageContentWithHeuristics(html, url) {
   const root = parseHtml(html);
 
   const metadata = {
@@ -130,6 +175,7 @@ export function extractPageContent(html, url) {
   return {
     url,
     source: "direct-fetch",
+    extractor: "heuristic",
     title: metadata.title,
     description: metadata.description,
     metadata,
@@ -144,4 +190,20 @@ export function extractPageContent(html, url) {
       paragraph_count: candidate.paragraphCount,
     },
   };
+}
+
+export async function extractPageContent(html, url) {
+  try {
+    const article = await extractFromHtml(html, url);
+    const extracted = normalizeExtractedArticle(article, url);
+
+    if (extracted) {
+      return extracted;
+    }
+  } catch (_) {
+    // Fall back to the local heuristic extractor when the library cannot parse
+    // a page or when Worker bundling/runtime behavior differs by site.
+  }
+
+  return extractPageContentWithHeuristics(html, url);
 }
