@@ -12,6 +12,7 @@ English | [中文](./README.zh.md)
 
 - 🔍 **Prioritized Search Gateway** - Use Startpage first, then DuckDuckGo, Brave, Mojeek, and Bing as fallback engines
 - 🤖 **AI Enhanced (MCP)** - Native support for Model Context Protocol, one-click search tool integration for **OpenClaw** / **Claude Code** / **Codex**
+- 🔎 **Research API** - `/research` searches first, then reads readable excerpts from top sources for AI retrieval
 - ⚡ **Smart Fallback** - Stop after enough deduplicated results instead of always querying every engine
 - 🛡️ **Fault Tolerance** - Timeout, parse, and upstream errors are classified; unhealthy engines are cooled down automatically
 - 🧹 **Deduplication & Ranking** - Canonicalize URLs, remove duplicate results, and rank by engine priority + query relevance
@@ -78,6 +79,8 @@ Edit your config file ([configuration guide](https://modelcontextprotocol.io/qui
 - `CF_SEARCH_URL`: Worker deployment URL (required)
 - `CF_SEARCH_TOKEN`: Auth token (required if your Worker has `TOKEN` configured)
 
+The MCP package exposes `web_search`, `search`, `research`, and `content`: the first two return deduplicated search results, `research` also fetches readable excerpts from top sources, and `content` extracts one specific URL.
+
 #### 3. Verify Installation
 
 - **OpenClaw**: Run `openclaw gateway restart` + `openclaw mcp list` and check that `cloudflare-search` appears
@@ -106,6 +109,11 @@ cd cloudflare-search
 
 # 4. Deploy
 wrangler deploy
+
+# Optional: verify a deployed Worker
+SMOKE_BASE_URL=https://your-worker-name.your-subdomain.workers.dev \
+SMOKE_TOKEN=$YOUR-TOKEN \
+npm run smoke
 ```
 
 ### Method 3: Use Cloudflare Dashboard
@@ -178,12 +186,15 @@ Used to execute search queries and return aggregated results.
 | `q` / `query` | `string` | yes      | Search keyword                                             | `cloudflare`     |
 | `engines`     | `string` | no       | Specify search engines, separated by commas               | `startpage,duckduckgo` |
 | `language`    | `string` | no       | Language/region hint passed to supported engines          | `en`, `zh-CN`    |
-| `location`    | `string` | no       | Location hint. Defaults to `auto`, using Cloudflare `request.cf.city` / `region`; use `off` to disable | `auto`, `Shanghai`, `off` |
+| `location`    | `string` | no       | Location hint. Defaults to `off`; use `auto` to append Cloudflare `request.cf.city` / `region` | `auto`, `Shanghai`, `off` |
 | `time_range`  | `string` | no       | Time filter: `day`, `week`, `month`, or `year`            | `month`          |
 | `pageno`      | `number` | no       | Zero-based page number                                    | `0`              |
+| `min_authority_score` | `number` | no | Minimum deterministic source authority score after ranking | `1` |
+| `include_source_types` | `string` | no | Comma-separated source types to include | `official,benchmark,paper,media` |
+| `exclude_source_types` | `string` | no | Comma-separated source types to exclude | `community,blog,low_credibility` |
 | `token`       | `string` | no/yes   | Access token compatibility parameter; prefer `Authorization: Bearer ...` | `$YOUR-TOKEN`    |
 
-By default, `location=auto` is enabled. When Cloudflare provides a city or region in `request.cf`, the Worker appends it to the actual upstream query and returns both `query` and `effective_query` for transparency. In MCP/proxy scenarios this reflects the caller/proxy IP location; use `location=off` to disable it.
+By default, location enrichment is disabled. Only when you pass `location=auto` will the Worker append Cloudflare `request.cf` city or region to the actual upstream query and return both `query` and `effective_query` for transparency. In MCP/proxy scenarios this reflects the caller/proxy IP location; you can also pass an explicit place such as `location=Shanghai`.
 
 **Supported Search Engines**:
 
@@ -210,11 +221,19 @@ By default, `location=auto` is enabled. When Cloudflare provides a city or regio
 		reason: string;
 	}>;
 	unresponsive_engines: string[];   // Unresponsive search engine list
+	source_filters?: {                // Present when source filters are active
+		include_source_types: string[];
+		exclude_source_types: string[];
+		min_authority_score: number | null;
+		active: boolean;
+	};
 	results: Array<{
 		title: string;                  // Result title
 		description: string;            // Result description
 		url: string;                    // Result link
 		engine: string;                 // Source engine
+		source_type?: string;           // Source type, such as official / benchmark / media / blog
+		authority_score?: number;       // Deterministic source authority boost
 	}>;
 }
 ```
@@ -225,12 +244,15 @@ By default, `location=auto` is enabled. When Cloudflare provides a city or regio
 # GET request
 curl "https://$YOUR-DOMAIN/search?q=cloudflare&engines=startpage,duckduckgo"
 
-# Default location=auto uses Cloudflare request.cf location when available
+# Default location=off does not append visitor city/region
 curl "https://$YOUR-DOMAIN/search?q=tomorrow%20weather"
 
-# Override or disable location enrichment
+# Override or enable automatic location enrichment
 curl "https://$YOUR-DOMAIN/search?q=tomorrow%20weather&location=Hong%20Kong"
-curl "https://$YOUR-DOMAIN/search?q=cloudflare&location=off"
+curl "https://$YOUR-DOMAIN/search?q=cloudflare&location=auto"
+
+# Require at least a known positively scored source
+curl "https://$YOUR-DOMAIN/search?q=deepseek%20model&min_authority_score=1"
 
 # JSON POST request
 curl -X POST "https://$YOUR-DOMAIN/search" \
@@ -248,9 +270,9 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 ```json
 {
 	"query": "cloudflare",
-	"effective_query": "cloudflare San Francisco",
-	"location": "San Francisco",
-	"location_source": "auto",
+	"effective_query": "cloudflare",
+	"location": null,
+	"location_source": "disabled",
 	"number_of_results": 15,
 	"enabled_engines": ["startpage", "duckduckgo", "brave", "mojeek", "bing"],
 	"skipped_engines": [],
@@ -260,7 +282,9 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 			"title": "Cloudflare - The Web Performance & Security Company",
 			"description": "Cloudflare is on a mission to help build a better Internet...",
 			"url": "https://www.cloudflare.com/",
-			"engine": "startpage"
+			"engine": "startpage",
+			"source_type": "official",
+			"authority_score": 90
 		},
 		{
 			"title": "Cloudflare Workers",
@@ -271,6 +295,60 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 	]
 }
 ```
+
+### `/research` Endpoint
+
+Builds on `/search` by fetching readable page content from the top ranked results and returning source excerpts suitable for AI retrieval. It uses direct Worker HTML fetches by default, does not consume Cloudflare Browser Rendering quota, and does not call any LLM.
+
+`/research` supports all `/search` query parameters plus:
+
+| Parameter | Type | Required | Description | Default |
+| --------- | ---- | -------- | ----------- | ------- |
+| `limit` | `number` | no | Number of top search results to fetch, clamped to 1-5 | `3` |
+| `excerpt_chars` | `number` | no | Characters returned per source excerpt, clamped to 200-4,000 | `1200` |
+| `max_bytes` | `number` | no | Maximum upstream response bytes read per source, clamped to 50,000-5,000,000 | `1500000` |
+
+Search ranking applies deterministic source authority boosts by domain. Official sites, model repositories, papers, and benchmark platforms rank higher; generic blogs and community pages can be slightly demoted. External low-credibility source lists are synced into `data/sourceAuthority.generated.json` with `npm run update:source-authority`; the current sync uses the Iffy.news Index and JanaLasser/misinformation_domains. Project-specific allow/block decisions live in `data/sourceAuthority.overrides.json` and are merged last. No AI model is used for this scoring.
+
+During source reading, very thin or navigation-heavy extracted pages are marked as `status: "skipped"` with reason code `LOW_CONTENT` and do not count toward `read_count`; the Worker continues reading later results until it reaches `limit` or exhausts available results.
+
+#### Request Example
+
+```bash
+curl "https://$YOUR-DOMAIN/research?q=cloudflare&limit=3&excerpt_chars=1200" \
+	-H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### Response Example
+
+```json
+{
+	"query": "cloudflare",
+	"effective_query": "cloudflare",
+	"number_of_results": 15,
+	"attempted_count": 3,
+	"read_count": 3,
+	"failed_count": 0,
+	"skipped_count": 0,
+	"sources": [
+		{
+			"index": 1,
+			"status": "ok",
+			"title": "Cloudflare Workers",
+			"url": "https://workers.cloudflare.com/",
+			"engine": "startpage",
+			"source_type": "official",
+			"authority_score": 90,
+			"extractor": "readability",
+			"excerpt": "Readable page excerpt...",
+			"metadata": {}
+		}
+	],
+	"results": []
+}
+```
+
+If an individual search result cannot be fetched, the overall response remains `200`; that item in `sources[]` returns `status: "error"` with error details. The endpoint keeps trying later search results until it reads `limit` usable sources or runs out of results.
 
 ### `/markdown` Endpoint
 

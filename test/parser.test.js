@@ -726,3 +726,93 @@ test("deduplicates by canonical URL and prefers higher priority engine", () => {
   assert.equal(results[0].engine, "startpage");
   assert.equal(results[0].url, "https://example.com/workers");
 });
+
+test("ranks authoritative model sources ahead of generic pages", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "deepseek latest model performance benchmark",
+    registry,
+    engineResults: [
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "DeepSeek model performance roundup",
+            url: "https://example.com/deepseek-v4-performance",
+            description: "Generic roundup with model performance claims",
+          },
+          {
+            title: "DeepSeek official model page",
+            url: "https://api-docs.deepseek.com/models",
+            description: "Official DeepSeek model documentation and details",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].url, "https://api-docs.deepseek.com/models");
+  assert.equal(results[0].source_type, "official");
+  assert.ok(results[0].authority_score > results[1].authority_score);
+});
+
+test("demotes generated low-credibility source domains", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "election news",
+    registry,
+    engineResults: [
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "Election news",
+            url: "https://100percentfedup.com/election-news",
+            description: "Generated low credibility list match",
+          },
+          {
+            title: "Election news",
+            url: "https://example.com/election-news",
+            description: "Generic unmatched source",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].url, "https://example.com/election-news");
+  assert.ok(["disinformation", "low_credibility"].includes(results[1].source_type));
+  assert.ok(results[1].authority_score < 0);
+});
+
+test("applies generated manual source authority overrides", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "cloudflare workers docs",
+    registry,
+    engineResults: [
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "Cloudflare Workers docs",
+            url: "https://developers.cloudflare.com/workers/",
+            description: "Official Workers documentation",
+          },
+          {
+            title: "Cloudflare Workers article",
+            url: "https://example.com/workers",
+            description: "Generic Workers article",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
+  assert.equal(results[0].source_type, "official");
+  assert.ok(results[0].authority_score > results[1].authority_score);
+});

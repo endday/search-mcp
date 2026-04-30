@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "Project-maintained source authority overrides. These entries are merged after external lists by npm run update:source-authority.",
+  "domains": {
+    "cloudflare.com": {
+      "source_type": "official",
+      "authority_score": 85,
+      "label": "official_site"
+    },
+    "developers.cloudflare.com": {
+      "source_type": "official",
+      "authority_score": 90,
+      "label": "official_docs"
+    },
+    "openai.com": {
+      "source_type": "official",
+      "authority_score": 85,
+      "label": "official_site"
+    },
+    "platform.openai.com": {
+      "source_type": "official",
+      "authority_score": 90,
+      "label": "official_docs"
+    }
+  }
+}

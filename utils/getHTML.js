@@ -158,6 +158,10 @@ export function getSearchHtml() {
       display: none;
     }
 
+    .api-test-panel[hidden] {
+      display: none;
+    }
+
     .engine-check {
       align-items: center;
       border: 1px solid var(--line);
@@ -177,9 +181,25 @@ export function getSearchHtml() {
       padding: 1rem;
     }
 
+    .json-output {
+      background: #101817;
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+      border-radius: 8px;
+      color: #d7fff6;
+      max-height: 360px;
+      overflow: auto;
+      padding: 1rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     @media (prefers-color-scheme: dark) {
       .code-block {
         background: #0d1110;
+      }
+
+      .json-output {
+        background: #0b1110;
       }
     }
   </style>
@@ -369,12 +389,12 @@ export function getSearchHtml() {
                       <input
                         type="text"
                         id="locationInput"
-                        value="auto"
+                        value="off"
                         placeholder="auto / 上海 / off"
                         class="field"
                       >
                       <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        默认 <code>auto</code>，会使用 Cloudflare 提供的访问者城市/地区；传 <code>off</code> 可关闭。
+                        默认 <code>off</code>，不会追加城市；传 <code>auto</code> 才使用 Cloudflare 提供的访问者城市/地区。
                       </p>
                     </div>
 
@@ -437,6 +457,127 @@ export function getSearchHtml() {
                     </button>
                     <p id="searchStatus" class="hidden rounded-md px-3 py-2 text-sm"></p>
                   </form>
+                </div>
+
+                <!-- 接口测试台 -->
+                <div class="order-3 panel mt-4 p-5">
+                  <div class="flex flex-col gap-3 border-b border-[var(--line)] pb-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <h2 class="text-sm font-bold text-[var(--ink)]">
+                        接口测试台
+                      </h2>
+                      <p class="mt-1 text-xs text-[var(--ink-muted)]">
+                        直接调用 Worker API，响应会以 JSON 形式显示。
+                      </p>
+                    </div>
+                    <div class="flex gap-2 overflow-x-auto rounded-lg border border-[var(--line)] bg-[var(--surface-muted)] p-1" role="tablist" aria-label="API endpoint tests">
+                      <button type="button" class="tab-button is-active" data-api-test-target="search" role="tab" aria-selected="true">/search</button>
+                      <button type="button" class="tab-button" data-api-test-target="research" role="tab" aria-selected="false">/research</button>
+                      <button type="button" class="tab-button" data-api-test-target="content" role="tab" aria-selected="false">/content</button>
+                    </div>
+                  </div>
+
+                  <section class="api-test-panel mt-4" data-api-test-panel="search" role="tabpanel">
+                    <form id="searchApiForm" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_180px_180px_auto]">
+                      <div>
+                        <label for="searchApiQuery" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          搜索关键词
+                        </label>
+                        <input id="searchApiQuery" class="field" type="text" value="cloudflare workers" required>
+                      </div>
+                      <div>
+                        <label for="searchApiMinAuthority" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          最低权威分
+                        </label>
+                        <input id="searchApiMinAuthority" class="field" type="number" step="1" placeholder="可选">
+                      </div>
+                      <div>
+                        <label for="searchApiIncludeTypes" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          包含来源
+                        </label>
+                        <input id="searchApiIncludeTypes" class="field" type="text" placeholder="official,media">
+                      </div>
+                      <div>
+                        <label for="searchApiExcludeTypes" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          排除来源
+                        </label>
+                        <input id="searchApiExcludeTypes" class="field" type="text" placeholder="community,blog">
+                      </div>
+                      <div class="flex items-end">
+                        <button id="searchApiBtn" type="submit" class="action-btn w-full lg:w-auto">测试 /search</button>
+                      </div>
+                    </form>
+                    <p id="searchApiStatus" class="hidden rounded-md px-3 py-2 text-sm"></p>
+                    <pre id="searchApiOutput" class="json-output mt-4 text-xs">等待请求...</pre>
+                  </section>
+
+                  <section class="api-test-panel mt-4" data-api-test-panel="research" role="tabpanel" hidden>
+                    <form id="researchApiForm" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_120px_120px_180px_180px_auto]">
+                      <div>
+                        <label for="researchApiQuery" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          研究关键词
+                        </label>
+                        <input id="researchApiQuery" class="field" type="text" value="cloudflare workers" required>
+                      </div>
+                      <div>
+                        <label for="researchApiLimit" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          来源数
+                        </label>
+                        <input id="researchApiLimit" class="field" type="number" min="1" max="5" value="3">
+                      </div>
+                      <div>
+                        <label for="researchApiExcerpt" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          摘录字符
+                        </label>
+                        <input id="researchApiExcerpt" class="field" type="number" min="200" max="4000" value="1200">
+                      </div>
+                      <div>
+                        <label for="researchApiMinAuthority" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          最低权威分
+                        </label>
+                        <input id="researchApiMinAuthority" class="field" type="number" step="1" placeholder="可选">
+                      </div>
+                      <div>
+                        <label for="researchApiIncludeTypes" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          包含来源
+                        </label>
+                        <input id="researchApiIncludeTypes" class="field" type="text" placeholder="official,media">
+                      </div>
+                      <div>
+                        <label for="researchApiExcludeTypes" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          排除来源
+                        </label>
+                        <input id="researchApiExcludeTypes" class="field" type="text" placeholder="community,blog">
+                      </div>
+                      <div class="flex items-end">
+                        <button id="researchApiBtn" type="submit" class="action-btn w-full lg:w-auto">测试 /research</button>
+                      </div>
+                    </form>
+                    <p id="researchApiStatus" class="hidden rounded-md px-3 py-2 text-sm"></p>
+                    <pre id="researchApiOutput" class="json-output mt-4 text-xs">等待请求...</pre>
+                  </section>
+
+                  <section class="api-test-panel mt-4" data-api-test-panel="content" role="tabpanel" hidden>
+                    <form id="contentApiForm" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_auto]">
+                      <div>
+                        <label for="contentApiUrl" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          页面 URL
+                        </label>
+                        <input id="contentApiUrl" class="field" type="url" value="https://example.com/" required>
+                      </div>
+                      <div>
+                        <label for="contentApiMaxBytes" class="mb-2 block text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                          最大字节
+                        </label>
+                        <input id="contentApiMaxBytes" class="field" type="number" min="50000" max="5000000" value="1500000">
+                      </div>
+                      <div class="flex items-end">
+                        <button id="contentApiBtn" type="submit" class="action-btn w-full lg:w-auto">测试 /content</button>
+                      </div>
+                    </form>
+                    <p id="contentApiStatus" class="hidden rounded-md px-3 py-2 text-sm"></p>
+                    <pre id="contentApiOutput" class="json-output mt-4 text-xs">等待请求...</pre>
+                  </section>
                 </div>
 
                 <!-- 搜索结果区域 -->
@@ -506,7 +647,7 @@ export function getSearchHtml() {
                         <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">q</code> / <code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">query</code> - 搜索关键词 (必填)</li>
                         <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">engines</code> - 指定搜索引擎,多个用逗号分隔 (可选)</li>
                         <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">language</code> - 语言/区域，如 <code>en</code>、<code>zh-CN</code> (可选)</li>
-                        <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">location</code> - 位置增强，默认 <code>auto</code>；传 <code>off</code> 可关闭 (可选)</li>
+                        <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">location</code> - 位置增强，默认 <code>off</code>；传 <code>auto</code> 可使用 Cloudflare 城市/地区 (可选)</li>
                         <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">time_range</code> - <code>day</code>、<code>week</code>、<code>month</code>、<code>year</code> (可选)</li>
                         <li><code class="px-1 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded text-zinc-900 dark:text-zinc-100">pageno</code> - 从 0 开始的页码 (可选)</li>
                         ${
@@ -784,6 +925,8 @@ export function getSearchHtml() {
     const tokenStorageKey = 'cloudflare-search-token';
     const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
     const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
+    const apiTestButtons = Array.from(document.querySelectorAll('[data-api-test-target]'));
+    const apiTestPanels = Array.from(document.querySelectorAll('[data-api-test-panel]'));
     const urlParams = new URLSearchParams(window.location.search);
     const tokenInput = document.getElementById('tokenInput');
     const locationInput = document.getElementById('locationInput');
@@ -801,7 +944,7 @@ export function getSearchHtml() {
     }
 
     if (locationInput) {
-      locationInput.value = urlParams.get('location') || 'auto';
+      locationInput.value = urlParams.get('location') || 'off';
     }
 
     function activateTab(tabName) {
@@ -819,6 +962,24 @@ export function getSearchHtml() {
     tabButtons.forEach((button) => {
       button.addEventListener('click', () => {
         activateTab(button.dataset.tabTarget);
+      });
+    });
+
+    function activateApiTest(tabName) {
+      apiTestButtons.forEach((button) => {
+        const active = button.dataset.apiTestTarget === tabName;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+
+      apiTestPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.apiTestPanel !== tabName;
+      });
+    }
+
+    apiTestButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        activateApiTest(button.dataset.apiTestTarget);
       });
     });
 
@@ -1036,6 +1197,86 @@ export function getSearchHtml() {
       return data;
     }
 
+    function buildApiUrl(path, params) {
+      const url = new URL(path, currentOrigin);
+
+      Object.entries(params).forEach(([key, value]) => {
+        const normalizedValue = value === undefined || value === null ? '' : String(value).trim();
+        if (normalizedValue) {
+          url.searchParams.set(key, normalizedValue);
+        }
+      });
+
+      return url.toString();
+    }
+
+    async function requestApiJson(path, params) {
+      const response = await fetch(buildApiUrl(path, params), {
+        headers: getAuthHeaders(),
+      });
+
+      return parseJsonResponse(response);
+    }
+
+    function setButtonBusy(button, busy, label, busyLabel) {
+      if (!button) {
+        return;
+      }
+
+      button.disabled = busy;
+      button.textContent = busy ? busyLabel : label;
+    }
+
+    function renderJsonOutput(element, payload) {
+      if (!element) {
+        return;
+      }
+
+      element.textContent = JSON.stringify(payload, null, 2);
+    }
+
+    function setupApiTestForm({
+      formId,
+      buttonId,
+      statusId,
+      outputId,
+      buttonLabel,
+      busyLabel,
+      path,
+      getParams,
+      successMessage,
+    }) {
+      const form = document.getElementById(formId);
+      const button = document.getElementById(buttonId);
+      const status = document.getElementById(statusId);
+      const output = document.getElementById(outputId);
+
+      if (!form) {
+        return;
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        setButtonBusy(button, true, buttonLabel, busyLabel);
+        setMessage(status, 'loading', '正在请求接口...');
+
+        try {
+          const payload = await requestApiJson(path, getParams());
+          renderJsonOutput(output, payload);
+          setMessage(status, 'success', successMessage(payload));
+        } catch (error) {
+          renderJsonOutput(output, {
+            code: error.code || 'REQUEST_FAILED',
+            message: error.message,
+            details: error.details || null,
+          });
+          setMessage(status, 'error', error.message);
+        } finally {
+          setButtonBusy(button, false, buttonLabel, busyLabel);
+        }
+      });
+    }
+
     function isAuthError(error) {
       return (
         error?.status === 401 ||
@@ -1044,6 +1285,65 @@ export function getSearchHtml() {
         error?.code === 'FORBIDDEN'
       );
     }
+
+    function getApiSourceFilterParams(prefix) {
+      return {
+        min_authority_score: document.getElementById(prefix + 'MinAuthority')?.value,
+        include_source_types: document.getElementById(prefix + 'IncludeTypes')?.value,
+        exclude_source_types: document.getElementById(prefix + 'ExcludeTypes')?.value,
+      };
+    }
+
+    setupApiTestForm({
+      formId: 'searchApiForm',
+      buttonId: 'searchApiBtn',
+      statusId: 'searchApiStatus',
+      outputId: 'searchApiOutput',
+      buttonLabel: '测试 /search',
+      busyLabel: '请求中...',
+      path: '/search',
+      getParams: () => ({
+        q: document.getElementById('searchApiQuery').value,
+        location: locationInput ? locationInput.value : 'off',
+        ...getApiSourceFilterParams('searchApi'),
+      }),
+      successMessage: (payload) => \`/search 完成，共 \${payload.number_of_results || 0} 条结果。\`,
+    });
+
+    setupApiTestForm({
+      formId: 'researchApiForm',
+      buttonId: 'researchApiBtn',
+      statusId: 'researchApiStatus',
+      outputId: 'researchApiOutput',
+      buttonLabel: '测试 /research',
+      busyLabel: '读取中...',
+      path: '/research',
+      getParams: () => ({
+        q: document.getElementById('researchApiQuery').value,
+        limit: document.getElementById('researchApiLimit').value,
+        excerpt_chars: document.getElementById('researchApiExcerpt').value,
+        location: locationInput ? locationInput.value : 'off',
+        ...getApiSourceFilterParams('researchApi'),
+      }),
+      successMessage: (payload) =>
+        \`/research 完成，读取 \${payload.read_count || 0} 个来源，失败 \${payload.failed_count || 0} 个，跳过 \${payload.skipped_count || 0} 个。\`,
+    });
+
+    setupApiTestForm({
+      formId: 'contentApiForm',
+      buttonId: 'contentApiBtn',
+      statusId: 'contentApiStatus',
+      outputId: 'contentApiOutput',
+      buttonLabel: '测试 /content',
+      busyLabel: '抽取中...',
+      path: '/content',
+      getParams: () => ({
+        url: document.getElementById('contentApiUrl').value,
+        max_bytes: document.getElementById('contentApiMaxBytes').value,
+      }),
+      successMessage: (payload) =>
+        \`/content 完成，正文长度 \${payload.stats?.text_length || 0} 字符。\`,
+    });
 
     updateExamples();
     loadGeoInfo();

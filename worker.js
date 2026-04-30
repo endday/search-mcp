@@ -10,6 +10,9 @@ const TARGET_FETCH_USER_AGENT =
   "Mozilla/5.0 (compatible; CloudflareSearchReader/1.0; +https://workers.cloudflare.com/)";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_SAFE_REDIRECTS = 5;
+const MIN_RESEARCH_TEXT_LENGTH = 240;
+const MAX_RESEARCH_LINK_DENSITY = 0.65;
+const RESEARCH_SOURCE_CONCURRENCY = 3;
 
 function buildCorsHeaders(request) {
   const headers = {
@@ -206,6 +209,126 @@ function normalizeWaitUntil(value) {
   )
     ? normalized
     : "load";
+}
+
+function normalizeContentMaxBytes(params) {
+  return normalizePositiveInteger(params.max_bytes || params.maxBytes, 1_500_000, {
+    min: 50_000,
+    max: 5_000_000,
+  });
+}
+
+function normalizeResearchLimit(value) {
+  return normalizePositiveInteger(value, 3, {
+    min: 1,
+    max: 5,
+  });
+}
+
+function normalizeExcerptChars(value) {
+  return normalizePositiveInteger(value, 1200, {
+    min: 200,
+    max: 4000,
+  });
+}
+
+function normalizeSourceTypeList(value) {
+  const items = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(",")
+        .map((item) => item.trim());
+
+  return [
+    ...new Set(
+      items
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function normalizeMinAuthorityScore(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getOptionalParam(params, snakeName, camelName) {
+  return params[snakeName] !== undefined ? params[snakeName] : params[camelName];
+}
+
+function normalizeSourceFilters(params) {
+  const includeSourceTypes = normalizeSourceTypeList(
+    getOptionalParam(params, "include_source_types", "includeSourceTypes")
+  );
+  const excludeSourceTypes = normalizeSourceTypeList(
+    getOptionalParam(params, "exclude_source_types", "excludeSourceTypes")
+  );
+  const minAuthorityScore = normalizeMinAuthorityScore(
+    getOptionalParam(params, "min_authority_score", "minAuthorityScore")
+  );
+
+  return {
+    include_source_types: includeSourceTypes,
+    exclude_source_types: excludeSourceTypes,
+    min_authority_score: minAuthorityScore,
+    active:
+      includeSourceTypes.length > 0 ||
+      excludeSourceTypes.length > 0 ||
+      minAuthorityScore !== null,
+  };
+}
+
+function resultMatchesSourceFilters(result, filters) {
+  if (!filters.active) {
+    return true;
+  }
+
+  const sourceType = String(result.source_type || "unknown").toLowerCase();
+  const authorityScore = Number.isFinite(result.authority_score)
+    ? result.authority_score
+    : 0;
+
+  if (
+    filters.include_source_types.length > 0 &&
+    !filters.include_source_types.includes(sourceType)
+  ) {
+    return false;
+  }
+
+  if (filters.exclude_source_types.includes(sourceType)) {
+    return false;
+  }
+
+  if (
+    filters.min_authority_score !== null &&
+    authorityScore < filters.min_authority_score
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function applySourceFilters(response, filters) {
+  if (!filters.active) {
+    return response;
+  }
+
+  const results = response.results.filter((result) =>
+    resultMatchesSourceFilters(result, filters)
+  );
+
+  return {
+    ...response,
+    number_of_results: results.length,
+    source_filters: filters,
+    results,
+  };
 }
 
 function parseIpv4Address(value) {
@@ -527,10 +650,58 @@ async function readResponseTextWithLimit(response, maxBytes) {
   return chunks.join("");
 }
 
+async function fetchReadableContent(targetUrl, maxBytes) {
+  const normalizedTargetUrl = normalizeTargetUrl(targetUrl);
+  const upstreamResponse = await fetchWithSafeRedirects(normalizedTargetUrl, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "User-Agent": TARGET_FETCH_USER_AGENT,
+    },
+  });
+  const contentType = upstreamResponse.headers.get("content-type") || "";
+
+  if (!upstreamResponse.ok) {
+    throw new ApiError({
+      status: upstreamResponse.status >= 500 ? 502 : upstreamResponse.status,
+      code: "UPSTREAM_HTTP_ERROR",
+      category: "upstream",
+      message: `Upstream returned HTTP ${upstreamResponse.status}`,
+      details: {
+        upstream_status: upstreamResponse.status,
+      },
+    });
+  }
+
+  if (
+    contentType &&
+    !/text\/html|application\/xhtml\+xml|application\/xml|text\/xml/i.test(contentType)
+  ) {
+    throw new ApiError({
+      status: 415,
+      code: "UNSUPPORTED_CONTENT_TYPE",
+      category: "upstream",
+      message: `Unsupported content type: ${contentType}`,
+    });
+  }
+
+  const html = await readResponseTextWithLimit(upstreamResponse, maxBytes);
+  const payload = await extractPageContent(
+    html,
+    upstreamResponse.url || normalizedTargetUrl
+  );
+
+  return {
+    ...payload,
+    requested_url: normalizedTargetUrl,
+    content_type: contentType || null,
+    max_bytes: maxBytes,
+  };
+}
+
 function normalizeLocationValue(value) {
   const normalized = String(value || "").trim();
 
-  return normalized || "auto";
+  return normalized || "off";
 }
 
 function isLocationDisabled(value) {
@@ -706,6 +877,7 @@ async function handleSearch(request, params, requestId) {
 
   const locationContext = resolveLocationContext(request, params);
   const effectiveQuery = appendLocationToQuery(query, locationContext.value);
+  const sourceFilters = normalizeSourceFilters(params);
 
   const { response, meta } = await searchAllWithMeta({
     query: effectiveQuery,
@@ -714,8 +886,9 @@ async function handleSearch(request, params, requestId) {
     time_range: normalizeTimeRange(params.time_range || params.timeRange),
     pageno: normalizePageNumber(params.pageno || params.page),
   });
+  const filteredResponse = applySourceFilters(response, sourceFilters);
   const responsePayload = {
-    ...response,
+    ...filteredResponse,
     query,
     effective_query: effectiveQuery,
     location: locationContext.value || null,
@@ -732,6 +905,254 @@ async function handleSearch(request, params, requestId) {
       durationMs: Date.now() - startedAt,
       meta,
     })
+  );
+}
+
+function createResearchSource({
+  result,
+  index,
+  content,
+  excerptChars,
+}) {
+  const text = String(content.text || content.excerpt || "");
+
+  return {
+    ...getResearchSourceBase(result, index),
+    status: "ok",
+    title: content.title || result.title,
+    source_title: content.title || "",
+    source_description: content.description || "",
+    extractor: content.extractor || null,
+    metadata: content.metadata || {},
+    excerpt: text.slice(0, excerptChars),
+    stats: content.stats || null,
+  };
+}
+
+function getResearchSourceBase(result, index) {
+  return {
+    index: index + 1,
+    title: result.title,
+    url: result.url,
+    engine: result.engine,
+    source_type: result.source_type || "unknown",
+    authority_score: Number.isFinite(result.authority_score)
+      ? result.authority_score
+      : 0,
+    description: result.description,
+  };
+}
+
+function getResearchContentQuality(content) {
+  const textLength = String(content.text || content.excerpt || "").trim().length;
+  const paragraphCount = content.stats?.paragraph_count ?? 0;
+  const linkDensity = content.stats?.link_density ?? 0;
+
+  if (textLength < MIN_RESEARCH_TEXT_LENGTH) {
+    return {
+      ok: false,
+      code: "LOW_CONTENT",
+      message: `Extracted text is shorter than ${MIN_RESEARCH_TEXT_LENGTH} characters`,
+    };
+  }
+
+  if (paragraphCount === 0 && textLength < MIN_RESEARCH_TEXT_LENGTH * 2) {
+    return {
+      ok: false,
+      code: "LOW_CONTENT",
+      message: "Extracted content does not contain enough readable paragraphs",
+    };
+  }
+
+  if (linkDensity > MAX_RESEARCH_LINK_DENSITY && paragraphCount < 2) {
+    return {
+      ok: false,
+      code: "LOW_CONTENT",
+      message: "Extracted content appears to be navigation or link-heavy text",
+    };
+  }
+
+  return {
+    ok: true,
+  };
+}
+
+function createResearchSkippedSource({ result, index, content, quality }) {
+  return {
+    ...getResearchSourceBase(result, index),
+    status: "skipped",
+    source_title: content.title || "",
+    source_description: content.description || "",
+    extractor: content.extractor || null,
+    metadata: content.metadata || {},
+    stats: content.stats || null,
+    reason: {
+      code: quality.code,
+      category: "quality",
+      message: quality.message,
+    },
+  };
+}
+
+function createResearchErrorSource({ result, index, error }) {
+  const normalized = normalizeError(error);
+
+  return {
+    ...getResearchSourceBase(result, index),
+    status: "error",
+    error: {
+      code: normalized.code,
+      category: normalized.category,
+      message: normalized.message,
+      status: normalized.status || 500,
+    },
+  };
+}
+
+async function readResearchSource(result, index, { maxBytes, excerptChars }) {
+  try {
+    const content = await fetchReadableContent(result.url, maxBytes);
+    const quality = getResearchContentQuality(content);
+
+    if (!quality.ok) {
+      return createResearchSkippedSource({
+        result,
+        index,
+        content,
+        quality,
+      });
+    }
+
+    return createResearchSource({
+      result,
+      index,
+      content,
+      excerptChars,
+    });
+  } catch (error) {
+    return createResearchErrorSource({
+      result,
+      index,
+      error,
+    });
+  }
+}
+
+async function readResearchSources(results, { limit, maxBytes, excerptChars }) {
+  const sources = [];
+  let nextIndex = 0;
+  let readCount = 0;
+
+  while (nextIndex < results.length && readCount < limit) {
+    const remainingNeeded = limit - readCount;
+    const batchSize = Math.min(
+      RESEARCH_SOURCE_CONCURRENCY,
+      remainingNeeded,
+      results.length - nextIndex
+    );
+    const batch = Array.from({ length: batchSize }, () => {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      return readResearchSource(results[index], index, {
+        maxBytes,
+        excerptChars,
+      });
+    });
+    const batchSources = await Promise.all(batch);
+
+    sources.push(...batchSources);
+    readCount += batchSources.filter((source) => source.status === "ok").length;
+  }
+
+  return sources;
+}
+
+async function handleResearch(request, params, requestId) {
+  const query = String(params.q || params.query || "").trim();
+  const requestToken = getRequestToken(request, params.token);
+  const startedAt = Date.now();
+
+  if (!query) {
+    throw new ApiError({
+      status: 400,
+      code: "MISSING_QUERY",
+      category: "validation",
+      message: "Please provide 'q' or 'query' parameter",
+    });
+  }
+
+  ensureAuthConfigured();
+  await enforceRateLimit(request, getRateLimitToken(requestToken));
+
+  if (!verifyToken(requestToken)) {
+    throw new ApiError({
+      status: 401,
+      code: "UNAUTHORIZED",
+      category: "auth",
+      message: "Invalid or missing authentication token",
+    });
+  }
+
+  const locationContext = resolveLocationContext(request, params);
+  const effectiveQuery = appendLocationToQuery(query, locationContext.value);
+  const sourceFilters = normalizeSourceFilters(params);
+  const limit = normalizeResearchLimit(params.limit);
+  const excerptChars = normalizeExcerptChars(
+    params.excerpt_chars || params.excerptChars
+  );
+  const maxBytes = normalizeContentMaxBytes(params);
+  const { response, meta } = await searchAllWithMeta({
+    query: effectiveQuery,
+    engines: normalizeEngineParam(params.engines),
+    language: resolveSearchLanguage(params, query),
+    time_range: normalizeTimeRange(params.time_range || params.timeRange),
+    pageno: normalizePageNumber(params.pageno || params.page),
+  });
+  const filteredResponse = applySourceFilters(response, sourceFilters);
+  const sources = await readResearchSources(filteredResponse.results, {
+    limit,
+    maxBytes,
+    excerptChars,
+  });
+  const readCount = sources.filter((source) => source.status === "ok").length;
+  const failedCount = sources.filter((source) => source.status === "error").length;
+  const skippedCount = sources.filter(
+    (source) => source.status === "skipped"
+  ).length;
+  const durationMs = Date.now() - startedAt;
+  const responsePayload = {
+    ...filteredResponse,
+    query,
+    effective_query: effectiveQuery,
+    location: locationContext.value || null,
+    location_source: locationContext.source,
+    location_context: locationContext,
+    limit,
+    excerpt_chars: excerptChars,
+    max_bytes: maxBytes,
+    attempted_count: sources.length,
+    read_count: readCount,
+    failed_count: failedCount,
+    skipped_count: skippedCount,
+    duration_ms: durationMs,
+    sources,
+  };
+
+  return jsonResponse(
+    request,
+    responsePayload,
+    200,
+    {
+      ...buildSearchResponseHeaders({
+        requestId,
+        durationMs,
+        meta,
+      }),
+      "X-Research-Read-Count": String(readCount),
+      "X-Research-Failed-Count": String(failedCount),
+      "X-Research-Skipped-Count": String(skippedCount),
+    }
   );
 }
 
@@ -895,10 +1316,7 @@ async function handleHtml(request, params, requestId) {
   const targetUrl = normalizeTargetUrl(params.url);
   const requestToken = getRequestToken(request, params.token);
   const startedAt = Date.now();
-  const maxBytes = normalizePositiveInteger(params.max_bytes || params.maxBytes, 1_500_000, {
-    min: 50_000,
-    max: 5_000_000,
-  });
+  const maxBytes = normalizeContentMaxBytes(params);
 
   ensureAuthConfigured();
   await enforceRateLimit(request, getRateLimitToken(requestToken));
@@ -912,48 +1330,12 @@ async function handleHtml(request, params, requestId) {
     });
   }
 
-  const upstreamResponse = await fetchWithSafeRedirects(targetUrl, {
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "User-Agent": TARGET_FETCH_USER_AGENT,
-    },
-  });
-  const contentType = upstreamResponse.headers.get("content-type") || "";
-
-  if (!upstreamResponse.ok) {
-    throw new ApiError({
-      status: upstreamResponse.status >= 500 ? 502 : upstreamResponse.status,
-      code: "UPSTREAM_HTTP_ERROR",
-      category: "upstream",
-      message: `Upstream returned HTTP ${upstreamResponse.status}`,
-      details: {
-        upstream_status: upstreamResponse.status,
-      },
-    });
-  }
-
-  if (
-    contentType &&
-    !/text\/html|application\/xhtml\+xml|application\/xml|text\/xml/i.test(contentType)
-  ) {
-    throw new ApiError({
-      status: 415,
-      code: "UNSUPPORTED_CONTENT_TYPE",
-      category: "upstream",
-      message: `Unsupported content type: ${contentType}`,
-    });
-  }
-
-  const html = await readResponseTextWithLimit(upstreamResponse, maxBytes);
-  const payload = await extractPageContent(html, upstreamResponse.url || targetUrl);
+  const payload = await fetchReadableContent(targetUrl, maxBytes);
 
   return jsonResponse(
     request,
     {
       ...payload,
-      requested_url: targetUrl,
-      content_type: contentType || null,
-      max_bytes: maxBytes,
       duration_ms: Date.now() - startedAt,
     },
     200,
@@ -1061,6 +1443,17 @@ async function handleRequest(request) {
     } catch (error) {
       const normalized = normalizeError(error);
       console.error("[handleHtml] Error:", normalized.code, normalized.message);
+      return createErrorResponse(request, requestId, normalized);
+    }
+  }
+
+  if (url.pathname === "/research") {
+    try {
+      const params = await parseRequestParams(request, url);
+      return await handleResearch(request, params, requestId);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      console.error("[handleResearch] Error:", normalized.code, normalized.message);
       return createErrorResponse(request, requestId, normalized);
     }
   }

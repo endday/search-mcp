@@ -12,7 +12,9 @@
   },
   "scripts": {
     "start": "node mcp/cf-search-mcp.js",
-    "test": "node --test"
+    "test": "node --test test",
+    "smoke": "node scripts/smoke-test.js",
+    "update:source-authority": "node scripts/update-source-authority.js"
   },
   "keywords": [
     "mcp",

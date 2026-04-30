@@ -12,6 +12,7 @@
 
 - 🔍 **优先级搜索网关** - 默认先用 Startpage，再按 DuckDuckGo、Brave、Mojeek、Bing 顺序 fallback
 - 🤖 **AI 增强 (MCP)** - 原生支持 Model Context Protocol，一键为 **OpenClaw** / **Claude Code** / **Codex** 添加搜索工具
+- 🔎 **研究接口** - `/research` 先搜索再读取前几条来源正文摘录，适合 AI 检索增强
 - ⚡ **智能 fallback** - 达到足够的去重结果后提前停止，不再固定全并行
 - 🛡️ **容错机制** - 分类处理超时、解析失败、上游异常，并对不健康引擎做冷却
 - 🧹 **去重与排序** - URL 归一化、跨引擎去重、按引擎优先级和相关性排序
@@ -80,6 +81,8 @@
 - `CF_SEARCH_URL`: Worker 部署地址（必填）
 - `CF_SEARCH_TOKEN`: 鉴权 Token（如果 Worker 配置了 TOKEN 则必填）
 
+MCP 包会暴露 `web_search` / `search` / `research` / `content` 四个工具：前两个返回去重搜索结果，`research` 会额外读取前几条来源的正文摘录，`content` 用于抽取指定 URL 正文。
+
 #### 3. 验证安装
 
 - **OpenClaw**: `openclaw gateway restart` + `openclaw mcp list` 能看到 `cloudflare-search`
@@ -108,6 +111,11 @@ cd cloudflare-search
 
 # 4. 部署
 wrangler deploy
+
+# 可选：验证线上 Worker
+SMOKE_BASE_URL=https://your-worker-name.your-subdomain.workers.dev \
+SMOKE_TOKEN=$YOUR-TOKEN \
+npm run smoke
 ```
 
 ### 方式三：使用 Cloudflare Dashboard
@@ -180,12 +188,15 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 | `q` / `query` | `string` | yes    | 搜索关键词                                | `cloudflare`   |
 | `engines`     | `string` | no     | 指定搜索引擎，多个用逗号分隔              | `startpage,duckduckgo` |
 | `language`    | `string` | no     | 语言/地区提示，传给支持的搜索引擎         | `en`、`zh-CN` |
-| `location`    | `string` | no     | 位置提示，默认 `auto`，使用 Cloudflare `request.cf.city` / `region`；传 `off` 可关闭 | `auto`、`上海`、`off` |
+| `location`    | `string` | no     | 位置提示，默认 `off`；传 `auto` 才使用 Cloudflare `request.cf.city` / `region` | `auto`、`上海`、`off` |
 | `time_range`  | `string` | no     | 时间范围：`day`、`week`、`month`、`year` | `month` |
 | `pageno`      | `number` | no     | 从 0 开始的页码                           | `0` |
+| `min_authority_score` | `number` | no | 排名后保留的最低确定性来源权威分 | `1` |
+| `include_source_types` | `string` | no | 只保留这些来源类型，多个用逗号分隔 | `official,benchmark,paper,media` |
+| `exclude_source_types` | `string` | no | 排除这些来源类型，多个用逗号分隔 | `community,blog,low_credibility` |
 | `token`       | `string` | no/yes | 兼容参数形式的访问令牌；更推荐使用 `Authorization: Bearer ...` | `$YOUR-TOKEN`  |
 
-默认会启用 `location=auto`。当 Cloudflare 在 `request.cf` 中提供城市或地区时，Worker 会把它追加到实际上游搜索词里，并在响应中同时返回原始 `query` 和实际使用的 `effective_query`。如果是 MCP / 代理调用，这个位置代表调用方或代理出口 IP；如需关闭可传 `location=off`。
+默认不会追加位置。只有传 `location=auto` 时，Worker 才会在 Cloudflare `request.cf` 提供城市或地区时把它追加到实际上游搜索词里，并在响应中同时返回原始 `query` 和实际使用的 `effective_query`。如果是 MCP / 代理调用，这个位置代表调用方或代理出口 IP；也可以传具体位置，如 `location=上海`。
 
 **支持的搜索引擎**：
 
@@ -212,11 +223,19 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
     reason: string;
   }>;
   unresponsive_engines: string[];   // 无响应的搜索引擎列表
+  source_filters?: {                // 启用来源过滤时返回
+    include_source_types: string[];
+    exclude_source_types: string[];
+    min_authority_score: number | null;
+    active: boolean;
+  };
   results: Array<{
     title: string;                  // 结果标题
     description: string;            // 结果描述
     url: string;                    // 结果链接
     engine: string;                 // 来源引擎
+    source_type?: string;           // 来源类型，如 official / benchmark / media / blog
+    authority_score?: number;       // 确定性来源权威加权分
   }>;
 }
 ```
@@ -227,12 +246,15 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 # GET 请求
 curl "https://$YOUR-DOMAIN/search?q=cloudflare&engines=startpage,duckduckgo"
 
-# 默认 location=auto，会在 Cloudflare 提供地理信息时使用访问者城市/地区
+# 默认 location=off，不会追加访问者城市/地区
 curl "https://$YOUR-DOMAIN/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94"
 
-# 手动指定或关闭位置增强
+# 手动指定或开启自动位置增强
 curl "https://$YOUR-DOMAIN/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94&location=%E4%B8%8A%E6%B5%B7"
-curl "https://$YOUR-DOMAIN/search?q=cloudflare&location=off"
+curl "https://$YOUR-DOMAIN/search?q=cloudflare&location=auto"
+
+# 只保留已知正向权威分来源
+curl "https://$YOUR-DOMAIN/search?q=deepseek%20model&min_authority_score=1"
 
 # JSON POST 请求
 curl -X POST "https://$YOUR-DOMAIN/search" \
@@ -250,9 +272,9 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 ```json
 {
   "query": "cloudflare",
-  "effective_query": "cloudflare 上海",
-  "location": "上海",
-  "location_source": "auto",
+  "effective_query": "cloudflare",
+  "location": null,
+  "location_source": "disabled",
   "number_of_results": 15,
   "enabled_engines": ["startpage", "duckduckgo", "brave", "mojeek", "bing"],
   "skipped_engines": [],
@@ -273,6 +295,60 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
   ]
 }
 ```
+
+### `/research` 接口
+
+在 `/search` 基础上继续读取排名靠前的网页正文，返回适合 AI 使用的来源摘录。它默认使用 Worker 直接抓取 HTML，不消耗 Cloudflare Browser Rendering 配额，也不会调用任何 LLM。
+
+`/research` 支持 `/search` 的所有查询参数，并额外支持：
+
+| 参数 | 类型 | 必填 | 说明 | 默认 |
+| ---- | ---- | ---- | ---- | ---- |
+| `limit` | `number` | no | 读取前几条搜索结果，限制在 1-5 | `3` |
+| `excerpt_chars` | `number` | no | 每个来源返回的正文摘录长度，限制在 200-4,000 字符 | `1200` |
+| `max_bytes` | `number` | no | 每个来源最多读取的上游响应大小，限制在 50,000-5,000,000 字节 | `1500000` |
+
+搜索排序会根据域名做确定性权威加权，例如官方站点、模型仓库、论文、评测平台会加权，普通博客/社区会轻微降权。外部低可信来源列表通过 `npm run update:source-authority` 同步到 `data/sourceAuthority.generated.json`，当前接入 Iffy.news Index 与 JanaLasser/misinformation_domains。项目自己的加白/拉黑规则维护在 `data/sourceAuthority.overrides.json`，生成时最后合并。这个过程不使用 AI 模型。
+
+读取来源时，正文过短或明显偏导航/链接页的结果会返回 `status: "skipped"`，原因码为 `LOW_CONTENT`，不会计入 `read_count`；Worker 会继续读取后续结果，直到达到 `limit` 或没有更多结果。
+
+#### 请求示例
+
+```bash
+curl "https://$YOUR-DOMAIN/research?q=cloudflare&limit=3&excerpt_chars=1200" \
+  -H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### 响应示例
+
+```json
+{
+  "query": "cloudflare",
+  "effective_query": "cloudflare",
+  "number_of_results": 15,
+  "attempted_count": 3,
+  "read_count": 3,
+  "failed_count": 0,
+  "skipped_count": 0,
+  "sources": [
+    {
+      "index": 1,
+      "status": "ok",
+      "title": "Cloudflare Workers",
+      "url": "https://workers.cloudflare.com/",
+      "engine": "startpage",
+      "source_type": "official",
+      "authority_score": 90,
+      "extractor": "readability",
+      "excerpt": "Readable page excerpt...",
+      "metadata": {}
+    }
+  ],
+  "results": []
+}
+```
+
+如果某个搜索结果无法读取，响应仍然是 `200`，对应 `sources[]` 项会返回 `status: "error"` 和错误信息；接口会继续尝试后续搜索结果，直到读取到 `limit` 个可用来源或结果耗尽。
 
 ### `/markdown` 接口
 
