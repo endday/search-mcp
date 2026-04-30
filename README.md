@@ -20,6 +20,8 @@ English | [中文](./README.zh.md)
 - ⏱️ **Timeout Control** - Configurable request timeout to avoid long waits
 - 🪂 **Hedged Fallback** - Trigger the next fallback early when the primary engine is slow
 - 🔒 **Token Authentication** - Supports token auth to protect the service from abuse
+- 🧾 **Direct Content Reader** - `/content` fetches server-rendered pages and extracts the likely main content without browser rendering
+- 📄 **Rendered Markdown API** - Optional `/markdown` endpoint backed by Cloudflare Browser Rendering for SPA pages
 - 🌍 **CORS Support** - Configurable cross-origin resource sharing support
 - 🎨 **Web Interface** - Provides a clean search UI for easy testing
 - ⚡ **Zero-cost Operation** - Cloudflare Workers free tier supports 100,000 requests per day
@@ -270,6 +272,89 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 }
 ```
 
+### `/markdown` Endpoint
+
+Uses Cloudflare Browser Rendering to load a page and return rendered Markdown. This is useful for SPA pages where plain Worker `fetch()` cannot see the final content.
+
+Requires `CF_BROWSER_RENDERING_ACCOUNT_ID` and `CF_BROWSER_RENDERING_API_TOKEN`. If `TOKEN` is configured, `/markdown` also requires the same access token as `/search`.
+
+#### Request Parameters
+
+| Parameter | Type | Required | Description | Example |
+| --------- | ---- | -------- | ----------- | ------- |
+| `url` | `string` | yes | Target page URL. Only public `http` and `https` URLs are allowed | `https://example.com/article` |
+| `wait_until` | `string` | no | Browser navigation wait mode: `load`, `domcontentloaded`, `networkidle0`, `networkidle2` | `networkidle2` |
+| `wait_for_selector` | `string` | no | Optional selector to wait for before extracting Markdown | `main` |
+| `timeout_ms` | `number` | no | Browser timeout, clamped to 1,000-60,000 ms | `30000` |
+| `user_agent` | `string` | no | Optional user agent override | `Mozilla/5.0 ...` |
+| `token` | `string` | no/yes | Access token compatibility parameter; prefer `Authorization: Bearer ...` | `$YOUR-TOKEN` |
+
+#### Request Example
+
+```bash
+curl "https://$YOUR-DOMAIN/markdown?url=https%3A%2F%2Fexample.com%2Farticle&wait_until=networkidle2" \
+	-H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### Response Example
+
+```json
+{
+	"url": "https://example.com/article",
+	"source": "cloudflare-browser-rendering",
+	"markdown": "# Example\n\nRendered content",
+	"metadata": {},
+	"browser_ms_used": 4200,
+	"duration_ms": 5100
+}
+```
+
+The response forwards `X-Browser-Ms-Used` when Cloudflare returns it, so you can track Browser Rendering quota usage.
+
+### `/content` Endpoint
+
+Fetches a page through the Worker and extracts the likely main HTML content without Cloudflare Browser Rendering. It does not execute JavaScript, so it works best for server-rendered articles, blogs, docs, and news pages.
+
+If `TOKEN` is configured, `/content` requires the same access token as `/search`. `/html` is kept as a compatibility alias.
+
+The extractor uses a lightweight heuristic inspired by open source article extractors: remove obvious noise nodes, score candidate blocks by text density, paragraph count, positive/negative class names, and link density, then return the best block.
+
+#### Request Parameters
+
+| Parameter | Type | Required | Description | Example |
+| --------- | ---- | -------- | ----------- | ------- |
+| `url` | `string` | yes | Target page URL. Only public `http` and `https` URLs are allowed | `https://example.com/article` |
+| `max_bytes` | `number` | no | Maximum upstream response size, clamped to 50,000-5,000,000 bytes | `1500000` |
+| `token` | `string` | no/yes | Access token compatibility parameter; prefer `Authorization: Bearer ...` | `$YOUR-TOKEN` |
+
+#### Request Example
+
+```bash
+curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
+	-H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### Response Example
+
+```json
+{
+	"url": "https://example.com/article",
+	"source": "direct-fetch",
+	"title": "Example Article",
+	"description": "Short page summary",
+	"html": "<article>...</article>",
+	"text": "Readable article text...",
+	"excerpt": "Readable article text...",
+	"stats": {
+		"text_length": 1234,
+		"html_length": 1800,
+		"score": 1600,
+		"link_density": 0.08,
+		"paragraph_count": 6
+	}
+}
+```
+
 ## Search Engine Notes
 
 ### Supported Search Engines
@@ -314,10 +399,13 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 | `CORS_ALLOWED_ORIGINS` | `string`/`array` | `*` | Allowed browser origins; set specific origins to restrict CORS |
 | `CORS_ALLOWED_HEADERS` | `string`/`array` | `Authorization,Content-Type,x-api-key` | Allowed CORS request headers |
 | `TOKEN` | `string` | `null` | Access token. Enables auth when configured to prevent abuse |
+| `CF_BROWSER_RENDERING_ACCOUNT_ID` | `string` | `null` | Cloudflare account ID used by `/markdown` |
+| `CF_BROWSER_RENDERING_API_TOKEN` | `string` | `null` | API token with Browser Rendering - Edit permission used by `/markdown` |
 
 **Notes**:
 
 - After `TOKEN` is configured, all requests must provide a valid token
+- `/markdown` consumes Cloudflare Browser Rendering quota; keep `TOKEN` enabled on public deployments
 - Bind `SEARCH_STATE_KV` to share rate-limit counters and engine health across isolates; KV writes are eventually consistent, not strict atomic counters
 - Bind a KV namespace named `SEARCH_KV` to enable response caching; stale cache can still be returned if live upstream search fails
 
@@ -339,6 +427,8 @@ RATE_LIMIT_MAX_REQUESTS = "60"
 HEALTH_STATE_TTL_SECONDS = "3600"
 CORS_ALLOWED_ORIGINS = "https://app.example.com"
 TOKEN = "your-secret-token-here"
+CF_BROWSER_RENDERING_ACCOUNT_ID = "your-account-id"
+CF_BROWSER_RENDERING_API_TOKEN = "your-browser-rendering-api-token"
 
 [[kv_namespaces]]
 binding = "SEARCH_KV"

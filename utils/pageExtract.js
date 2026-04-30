@@ -1,0 +1,147 @@
+import { cleanText, parseHtml } from "./html.js";
+
+const NOISE_SELECTOR =
+  "script, style, noscript, nav, footer, header, aside, form, iframe, svg, canvas, button, input, select, textarea";
+const CANDIDATE_SELECTOR =
+  "article, main, section, div, [role=main], .article, .post, .content, .entry-content, #content";
+const POSITIVE_RE =
+  /article|body|content|entry|hentry|main|page|post|story|text|正文|内容|文章/i;
+const NEGATIVE_RE =
+  /ad|banner|comment|combx|contact|footer|header|menu|meta|nav|promo|related|remark|rss|share|sidebar|social|tag|tool|widget|广告|评论|导航|分享|推荐|相关阅读/i;
+
+function getNodeText(node) {
+  return cleanText(node?.text || "");
+}
+
+function getMeta(root, selector) {
+  return cleanText(root.querySelector(selector)?.getAttribute("content") || "");
+}
+
+function getNodeSignal(node) {
+  return `${node.getAttribute?.("id") || ""} ${node.getAttribute?.("class") || ""}`;
+}
+
+function scoreCandidate(node) {
+  const text = getNodeText(node);
+  const textLength = text.length;
+
+  if (textLength < 80) {
+    return {
+      node,
+      score: 0,
+      textLength,
+      linkDensity: 1,
+      paragraphCount: 0,
+    };
+  }
+
+  const linkTextLength = node
+    .querySelectorAll("a")
+    .reduce((total, link) => total + getNodeText(link).length, 0);
+  const paragraphCount = node.querySelectorAll("p").filter((p) => {
+    return getNodeText(p).length >= 20;
+  }).length;
+  const commaCount = (text.match(/[，,。.!?！？；;]/g) || []).length;
+  const signal = getNodeSignal(node);
+  const linkDensity = textLength ? linkTextLength / textLength : 1;
+  let score = textLength + paragraphCount * 120 + commaCount * 12;
+
+  if (POSITIVE_RE.test(signal)) {
+    score += 350;
+  }
+
+  if (NEGATIVE_RE.test(signal)) {
+    score -= 500;
+  }
+
+  score *= Math.max(0.05, 1 - linkDensity);
+
+  return {
+    node,
+    score,
+    textLength,
+    linkDensity,
+    paragraphCount,
+  };
+}
+
+function cleanTree(root) {
+  root.querySelectorAll(NOISE_SELECTOR).forEach((node) => node.remove());
+  root.querySelectorAll("a").forEach((link) => {
+    const href = String(link.getAttribute("href") || "").trim();
+    if (/^\s*javascript:/i.test(href)) {
+      link.removeAttribute("href");
+    }
+  });
+}
+
+function stripUnsafeHtml(html) {
+  return String(html || "")
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+href\s*=\s*(['"])\s*javascript:[\s\S]*?\1/gi, "");
+}
+
+function pickBestCandidate(root) {
+  const candidates = root
+    .querySelectorAll(CANDIDATE_SELECTOR)
+    .map(scoreCandidate)
+    .sort((a, b) => b.score - a.score);
+
+  const best = candidates[0];
+  if (best?.score > 0) {
+    return best;
+  }
+
+  const body = root.querySelector("body") || root;
+  return scoreCandidate(body);
+}
+
+export function extractPageContent(html, url) {
+  const root = parseHtml(html);
+
+  const metadata = {
+    title:
+      getMeta(root, 'meta[property="og:title"]') ||
+      getMeta(root, 'meta[name="twitter:title"]') ||
+      cleanText(root.querySelector("title")?.text || ""),
+    description:
+      getMeta(root, 'meta[property="og:description"]') ||
+      getMeta(root, 'meta[name="twitter:description"]') ||
+      getMeta(root, 'meta[name="description"]'),
+    site_name: getMeta(root, 'meta[property="og:site_name"]'),
+    author: getMeta(root, 'meta[name="author"]'),
+    published_time:
+      getMeta(root, 'meta[property="article:published_time"]') ||
+      getMeta(root, 'meta[name="date"]') ||
+      getMeta(root, 'meta[name="pubdate"]'),
+    image:
+      getMeta(root, 'meta[property="og:image"]') ||
+      getMeta(root, 'meta[name="twitter:image"]'),
+    lang: root.querySelector("html")?.getAttribute("lang") || "",
+  };
+
+  cleanTree(root);
+
+  const candidate = pickBestCandidate(root);
+  const text = getNodeText(candidate.node);
+  const contentHtml = stripUnsafeHtml(candidate.node?.toString() || "");
+
+  return {
+    url,
+    source: "direct-fetch",
+    title: metadata.title,
+    description: metadata.description,
+    metadata,
+    html: contentHtml,
+    text,
+    excerpt: text.slice(0, 500),
+    stats: {
+      text_length: text.length,
+      html_length: contentHtml.length,
+      score: Math.round(candidate.score),
+      link_density: Number(candidate.linkDensity.toFixed(3)),
+      paragraph_count: candidate.paragraphCount,
+    },
+  };
+}

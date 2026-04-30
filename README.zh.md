@@ -20,6 +20,8 @@
 - ⏱️ **超时控制** - 可配置请求超时时间，避免长时间等待
 - 🪂 **Hedged Fallback** - 当前引擎过慢时提前触发 fallback，降低尾延迟
 - 🔒 **Token 鉴权** - 支持 Token 认证，保护服务不被滥用
+- 🧾 **直连内容读取接口** - `/content` 不使用浏览器渲染，直接抓取服务端 HTML 并抽取疑似正文
+- 📄 **渲染 Markdown API** - 可选 `/markdown` 接口，基于 Cloudflare Browser Rendering 读取 SPA 页面
 - 🌍 **CORS 支持** - 可配置的跨域资源共享支持
 - 🎨 **Web 界面** - 提供简洁的搜索界面，方便测试
 - ⚡ **零成本运行** - Cloudflare Workers 免费版每天 10 万次请求
@@ -272,6 +274,89 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 }
 ```
 
+### `/markdown` 接口
+
+使用 Cloudflare Browser Rendering 加载页面并返回渲染后的 Markdown。它适合普通 Worker `fetch()` 看不到最终内容的 SPA 页面。
+
+需要配置 `CF_BROWSER_RENDERING_ACCOUNT_ID` 和 `CF_BROWSER_RENDERING_API_TOKEN`。如果配置了 `TOKEN`，`/markdown` 也需要和 `/search` 相同的访问令牌。
+
+#### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 | 示例 |
+| ---- | ---- | ---- | ---- | ---- |
+| `url` | `string` | yes | 目标页面 URL，仅允许公开的 `http` 和 `https` 地址 | `https://example.com/article` |
+| `wait_until` | `string` | no | 浏览器导航等待模式：`load`、`domcontentloaded`、`networkidle0`、`networkidle2` | `networkidle2` |
+| `wait_for_selector` | `string` | no | 抽取 Markdown 前等待的选择器 | `main` |
+| `timeout_ms` | `number` | no | 浏览器超时，限制在 1,000-60,000 ms | `30000` |
+| `user_agent` | `string` | no | 可选 User-Agent 覆盖 | `Mozilla/5.0 ...` |
+| `token` | `string` | no/yes | 兼容参数形式的访问令牌；更推荐使用 `Authorization: Bearer ...` | `$YOUR-TOKEN` |
+
+#### 请求示例
+
+```bash
+curl "https://$YOUR-DOMAIN/markdown?url=https%3A%2F%2Fexample.com%2Farticle&wait_until=networkidle2" \
+  -H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### 响应示例
+
+```json
+{
+  "url": "https://example.com/article",
+  "source": "cloudflare-browser-rendering",
+  "markdown": "# Example\n\nRendered content",
+  "metadata": {},
+  "browser_ms_used": 4200,
+  "duration_ms": 5100
+}
+```
+
+响应会在 Cloudflare 返回时透传 `X-Browser-Ms-Used`，方便统计 Browser Rendering 配额消耗。
+
+### `/content` 接口
+
+通过 Worker 直接抓取页面，并在不使用 Cloudflare Browser Rendering 的情况下抽取疑似正文 HTML。它不会执行 JavaScript，因此更适合服务端渲染的文章、博客、文档和新闻页面。
+
+如果配置了 `TOKEN`，`/content` 也需要和 `/search` 相同的访问令牌。`/html` 会保留为兼容别名。
+
+抽取器使用轻量启发式策略：移除明显噪音节点，按文本密度、段落数量、正负 class/id 线索、链接密度给候选块打分，然后返回最像正文的块。
+
+#### 请求参数
+
+| 参数 | 类型 | 必填 | 说明 | 示例 |
+| ---- | ---- | ---- | ---- | ---- |
+| `url` | `string` | yes | 目标页面 URL，仅允许公开的 `http` 和 `https` 地址 | `https://example.com/article` |
+| `max_bytes` | `number` | no | 允许读取的最大上游响应大小，限制在 50,000-5,000,000 字节 | `1500000` |
+| `token` | `string` | no/yes | 兼容参数形式的访问令牌；更推荐使用 `Authorization: Bearer ...` | `$YOUR-TOKEN` |
+
+#### 请求示例
+
+```bash
+curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
+  -H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### 响应示例
+
+```json
+{
+  "url": "https://example.com/article",
+  "source": "direct-fetch",
+  "title": "Example Article",
+  "description": "Short page summary",
+  "html": "<article>...</article>",
+  "text": "Readable article text...",
+  "excerpt": "Readable article text...",
+  "stats": {
+    "text_length": 1234,
+    "html_length": 1800,
+    "score": 1600,
+    "link_density": 0.08,
+    "paragraph_count": 6
+  }
+}
+```
+
 ## 搜索引擎说明
 
 ### 支持的搜索引擎
@@ -316,10 +401,13 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 | `CORS_ALLOWED_ORIGINS` | `string`/`array` | `*` | 允许发起浏览器请求的来源；设置具体域名可收紧 CORS |
 | `CORS_ALLOWED_HEADERS` | `string`/`array` | `Authorization,Content-Type,x-api-key` | 允许的 CORS 请求头 |
 | `TOKEN`           | `string` | `null`   | 访问令牌，配置后启用鉴权，保护服务不被滥用        |
+| `CF_BROWSER_RENDERING_ACCOUNT_ID` | `string` | `null` | `/markdown` 使用的 Cloudflare account ID |
+| `CF_BROWSER_RENDERING_API_TOKEN` | `string` | `null` | `/markdown` 使用的 Browser Rendering - Edit 权限 API token |
 
 **注意**：
 
 - `TOKEN` 配置后，所有请求都需要提供有效的 token
+- `/markdown` 会消耗 Cloudflare Browser Rendering 配额；公开部署时建议开启 `TOKEN`
 - 绑定 `SEARCH_STATE_KV` 后，限流计数和引擎健康度会跨 isolate 共享；KV 写入是最终一致，不是强原子限流
 - 绑定 `SEARCH_KV` 后即可启用跨请求缓存；若实时请求失败且 stale 缓存仍在有效期，会返回 stale 结果
 
@@ -341,6 +429,8 @@ RATE_LIMIT_MAX_REQUESTS = "60"
 HEALTH_STATE_TTL_SECONDS = "3600"
 CORS_ALLOWED_ORIGINS = "https://app.example.com"
 TOKEN = "your-secret-token-here"
+CF_BROWSER_RENDERING_ACCOUNT_ID = "your-account-id"
+CF_BROWSER_RENDERING_API_TOKEN = "your-browser-rendering-api-token"
 
 [[kv_namespaces]]
 binding = "SEARCH_KV"

@@ -97,6 +97,8 @@ export interface Env {
   CORS_ALLOWED_ORIGINS?: string[] | string;
   CORS_ALLOWED_HEADERS?: string[] | string;
   TOKEN?: string;
+  CF_BROWSER_RENDERING_ACCOUNT_ID?: string;
+  CF_BROWSER_RENDERING_API_TOKEN?: string;
   SEARCH_KV?: unknown;
   SEARCH_STATE_KV?: unknown;
 }

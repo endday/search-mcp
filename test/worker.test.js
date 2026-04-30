@@ -126,6 +126,73 @@ function installFetchStub(responses = {}) {
   return calls;
 }
 
+function installBrowserRenderingStub(handler) {
+  const calls = [];
+
+  globalThis.fetch = async (url, init = {}) => {
+    const requestUrl = new URL(String(url));
+
+    if (
+      requestUrl.hostname !== "api.cloudflare.com" ||
+      !requestUrl.pathname.endsWith("/browser-rendering/markdown")
+    ) {
+      throw new Error(`Unhandled fetch URL: ${url}`);
+    }
+
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({
+      url: String(url),
+      method: init.method,
+      authorization: init.headers?.Authorization,
+      body,
+    });
+
+    if (handler) {
+      return handler(url, init, body);
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        result: {
+          markdown: "# Example\n\nRendered content",
+          title: "Example",
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "X-Browser-Ms-Used": "4200",
+        },
+      }
+    );
+  };
+
+  return calls;
+}
+
+function installHtmlFetchStub(html, options = {}) {
+  const calls = [];
+
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      headers: init.headers || {},
+    });
+
+    return new Response(html, {
+      status: options.status || 200,
+      headers: {
+        "content-type": options.contentType || "text/html; charset=utf-8",
+        ...(options.headers || {}),
+      },
+    });
+  };
+
+  return calls;
+}
+
 function createEnv(overrides = {}) {
   return {
     DEFAULT_ENGINES: "bing",
@@ -232,6 +299,152 @@ test("returns Cloudflare visitor geo metadata", async () => {
   assert.equal(payload.geo.country, "CN");
   assert.equal(payload.geo.colo, "PVG");
   assert.equal(payload.geo.as_organization, "Example Network");
+});
+
+test("renders a URL to markdown through Cloudflare Browser Rendering", async () => {
+  const calls = installBrowserRenderingStub();
+
+  const response = await worker.fetch(
+    createSearchRequest(
+      "/markdown?url=https%3A%2F%2Fexample.com%2Farticle&wait_until=networkidle2&wait_for_selector=main",
+      {
+        headers: {
+          Authorization: "Bearer secret",
+        },
+      }
+    ),
+    createEnv({
+      TOKEN: "secret",
+      CF_BROWSER_RENDERING_ACCOUNT_ID: "account-id",
+      CF_BROWSER_RENDERING_API_TOKEN: "browser-token",
+    })
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.url, "https://example.com/article");
+  assert.equal(payload.source, "cloudflare-browser-rendering");
+  assert.equal(payload.markdown, "# Example\n\nRendered content");
+  assert.equal(payload.metadata.title, "Example");
+  assert.equal(payload.browser_ms_used, 4200);
+  assert.equal(response.headers.get("X-Browser-Ms-Used"), "4200");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].authorization, "Bearer browser-token");
+  assert.equal(calls[0].body.url, "https://example.com/article");
+  assert.equal(calls[0].body.gotoOptions.waitUntil, "networkidle2");
+  assert.equal(calls[0].body.waitForSelector.selector, "main");
+});
+
+test("requires Browser Rendering configuration for markdown endpoint", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/markdown?url=https%3A%2F%2Fexample.com"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(payload.code, "BROWSER_RENDERING_NOT_CONFIGURED");
+});
+
+test("rejects private network markdown targets", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/markdown?url=http%3A%2F%2F127.0.0.1%2Fadmin"),
+    createEnv({
+      CF_BROWSER_RENDERING_ACCOUNT_ID: "account-id",
+      CF_BROWSER_RENDERING_API_TOKEN: "browser-token",
+    })
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.code, "INVALID_URL");
+});
+
+test("fetches and extracts readable content without browser rendering", async () => {
+  const calls = installHtmlFetchStub(`<!doctype html>
+    <html lang="zh-CN">
+      <head>
+        <title>页面标题</title>
+        <meta name="description" content="页面摘要">
+        <meta property="article:published_time" content="2026-04-30">
+      </head>
+      <body>
+        <header>站点导航 首页 关于</header>
+        <nav><a href="/a">广告链接</a><a href="/b">更多链接</a></nav>
+        <main>
+          <article class="post-content">
+            <h1>真正的正文标题</h1>
+            <p>这是第一段正文，包含足够的信息，应该被保留下来，而不是被导航区域干扰。</p>
+            <p>这是第二段正文，继续提供页面主要内容，用来测试正文密度评分和段落数量。</p>
+            <p>这是第三段正文，带有更多中文标点，说明这个接口适合直接获取服务端返回的 HTML 正文。</p>
+          </article>
+        </main>
+        <footer>页脚 联系方式</footer>
+      </body>
+    </html>`);
+
+  const response = await worker.fetch(
+    createSearchRequest("/content?url=https%3A%2F%2Fexample.com%2Fpost"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.url, "https://example.com/post");
+  assert.equal(payload.source, "direct-fetch");
+  assert.equal(payload.title, "页面标题");
+  assert.equal(payload.description, "页面摘要");
+  assert.equal(payload.metadata.published_time, "2026-04-30");
+  assert.match(payload.html, /真正的正文标题/);
+  assert.match(payload.text, /这是第一段正文/);
+  assert.doesNotMatch(payload.text, /站点导航/);
+  assert.doesNotMatch(payload.text, /页脚/);
+  assert.ok(payload.stats.text_length > 80);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://example.com/post");
+});
+
+test("enforces content fetch response size limits", async () => {
+  installHtmlFetchStub("<html></html>", {
+    headers: {
+      "content-length": "5000001",
+    },
+  });
+
+  const response = await worker.fetch(
+    createSearchRequest("/content?url=https%3A%2F%2Fexample.com%2Flarge&max_bytes=50000"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 413);
+  assert.equal(payload.code, "CONTENT_TOO_LARGE");
+});
+
+test("rejects private network content targets", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/content?url=http%3A%2F%2F192.168.1.10%2Fadmin"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.code, "INVALID_URL");
+});
+
+test("keeps html endpoint as a content alias", async () => {
+  installHtmlFetchStub("<html><body><main><p>Alias content has enough readable text to pass extraction.</p><p>Second paragraph keeps the candidate useful.</p></main></body></html>");
+
+  const response = await worker.fetch(
+    createSearchRequest("/html?url=https%3A%2F%2Fexample.com%2Falias"),
+    createEnv()
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.source, "direct-fetch");
+  assert.match(payload.text, /Alias content/);
 });
 
 test("allows explicit location and location opt-out", async () => {

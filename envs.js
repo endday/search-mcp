@@ -24,6 +24,8 @@ const createDefaultEnv = () => ({
   CORS_ALLOWED_ORIGINS: ["*"],
   CORS_ALLOWED_HEADERS: ["Authorization", "Content-Type", "x-api-key"],
   TOKEN: null,
+  CF_BROWSER_RENDERING_ACCOUNT_ID: null,
+  CF_BROWSER_RENDERING_API_TOKEN: null,
   SEARCH_KV: null,
   SEARCH_STATE_KV: null,
 });

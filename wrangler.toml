@@ -49,6 +49,11 @@ routes = [
 # HEALTH_COOLDOWN_SECONDS = "180"
 # HEALTH_STATE_TTL_SECONDS = "3600"
 
+# Cloudflare Browser Rendering Markdown API (optional)
+# Used by /markdown. Create an API token with Browser Rendering - Edit permission.
+# CF_BROWSER_RENDERING_ACCOUNT_ID = "your-account-id"
+# CF_BROWSER_RENDERING_API_TOKEN = "your-browser-rendering-api-token"
+
 # ============================================
 # KV 缓存绑定(可选)
 # ============================================
