@@ -1,6 +1,6 @@
 {
   "name": "@endday/search-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP server exposing aggregated web search and content extraction tools, backed by a Cloudflare Workers gateway",
   "type": "module",
   "publishConfig": {

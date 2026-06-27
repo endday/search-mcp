@@ -9,8 +9,7 @@ import { normalizeResults } from "./index.js";
 
 const TOUTIAO_CHALLENGE_PATTERNS = [
   /安全验证/i,
-  /captcha/i,
-  /verify/i,
+  /captcha.*验证/i,
 ];
 
 function isToutiaoChallengeResponse(source) {
@@ -28,44 +27,121 @@ function throwToutiaoChallengeError() {
   });
 }
 
+/**
+ * Decode a Toutiao search-jump redirect URL.
+ * Links in the SSR HTML look like:
+ *   https://sou.toutiao.com/search/jump?url=https%3A%2F%2Fexample.com%2Farticle
+ * We extract and decode the embedded target URL.
+ */
+function decodeToutiaoJumpUrl(href) {
+  try {
+    const url = new URL(href);
+    const target = url.searchParams.get("url");
+    if (!target) return href;
+    const decoded = decodeURIComponent(target);
+    // If the decoded target is still a redirect, recursively decode
+    if (decoded.includes("search/jump?url=")) {
+      return decodeToutiaoJumpUrl(decoded);
+    }
+    return decoded;
+  } catch (_) {
+    return href;
+  }
+}
+
 export function parseToutiaoResults(html) {
   if (isToutiaoChallengeResponse(html)) {
     throwToutiaoChallengeError();
   }
 
   const root = parseHtml(html);
-  // Toutiao search results are in cards with data-test-card-id="undefined-default"
-  // or similar patterns. Each result card has a title link and a description area.
-  const cardNodes = root.querySelectorAll(
-    "[data-test-card-id='undefined-default'], [data-test-card-id^='67-']"
-  );
-
+  const seen = new Set();
   const results = [];
 
-  for (const card of cardNodes) {
-    // Title is the first meaningful <a> with an href
-    const linkNode = card.querySelector("a[href]");
-    if (!linkNode) {
+  // Toutiao SSR embeds search result links as redirect URLs:
+  //   https://sou.toutiao.com/search/jump?url=<encoded-target>
+  // These are the actual organic search results with title text in the <a>.
+  const allLinks = root.querySelectorAll("a[href]");
+
+  for (const link of allLinks) {
+    const href = link.getAttribute("href") || "";
+    const title = cleanText(link.textContent || link.innerHTML || "").trim();
+
+    const targetUrl = decodeToutiaoJumpUrl(href);
+    if (!targetUrl || targetUrl.startsWith("#") || targetUrl.startsWith("/")) {
       continue;
     }
 
-    const url = linkNode.getAttribute("href") || "";
-    const title = cleanText(linkNode.innerHTML || linkNode.text);
-
-    if (!title || !url || url.startsWith("#")) {
+    // Only process links that look like search result redirects or articles
+    if (!href.includes("search/jump?url=") && !targetUrl.includes("/article/")) {
       continue;
     }
 
-    // Description: look for text in the card after the title
-    const descNode =
-      card.querySelector(".abstract, .result-abstract, .cs-desc") ||
-      card.querySelector("p, span");
+    if (!title || title.length < 3 || title.length > 150) {
+      continue;
+    }
 
-    const description = cleanText(
-      descNode?.innerHTML || descNode?.text || ""
-    );
+    // Skip links whose title is only a video duration (e.g. "03:06")
+    if (/^\d{1,2}:\d{2}/.test(title)) {
+      continue;
+    }
 
-    results.push({ title, url, description });
+    // Skip navigation/UI links
+    if (
+      title.includes("换一换") ||
+      title.includes("首页") ||
+      title.includes("登录") ||
+      title.includes("去西瓜搜") ||
+      title.includes("去抖音搜") ||
+      title.includes("查看详情") ||
+      title.includes("播放") ||
+      title.startsWith("无障碍")
+    ) {
+      continue;
+    }
+
+    // Skip trending hot-list items
+    if (targetUrl.includes("/trending")) {
+      continue;
+    }
+
+    // Skip internal Toutiao search navigation links (other search suggestions)
+    if (targetUrl.includes("so.toutiao.com/search") && !targetUrl.includes("toutiao.com/a")) {
+      continue;
+    }
+
+    // Deduplicate by canonical URL
+    try {
+      const canonical = new URL(targetUrl).toString().toLowerCase();
+      if (seen.has(canonical)) {
+        continue;
+      }
+      seen.add(canonical);
+    } catch (_) {
+      if (seen.has(targetUrl)) {
+        continue;
+      }
+      seen.add(targetUrl);
+    }
+
+    // Description: look for the next sibling or parent that has abstract text
+    let description = "";
+    const parent = link.parentNode;
+    if (parent) {
+      // Try to find a description-like element near the link
+      const descCandidates = parent.querySelectorAll(
+        "span, p, div"
+      );
+      for (const candidate of descCandidates) {
+        const text = cleanText(candidate.textContent || "").trim();
+        if (text.length > 20 && text.length < 300 && text !== title) {
+          description = text;
+          break;
+        }
+      }
+    }
+
+    results.push({ title, url: targetUrl, description });
   }
 
   if (results.length === 0) {
@@ -92,7 +168,6 @@ async function searchToutiao(params) {
     engineLabel: "Toutiao",
     signal,
     referrer: "https://so.toutiao.com/",
-    // engineRequest already applies a realistic Chrome UA + Sec-Fetch headers
     blockedStatuses: [403, 429],
     isBlocked: isToutiaoChallengeResponse,
     blockedSurface: "html",
