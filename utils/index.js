@@ -229,9 +229,13 @@ function calculateResultScore({
   );
 }
 
+const LOW_QUALITY_ENGINE_THRESHOLD = 80;
+
 export function dedupeAndRankResults({ engineResults, query, registry }) {
   const queryTokens = tokenizeQuery(query);
   const deduped = new Map();
+  // Track which engines contributed to each URL for cross-engine penalty
+  const urlEngineCount = new Map();
 
   for (const { engine, results } of engineResults) {
     const enginePriority = registry[engine]?.priority || 0;
@@ -254,6 +258,10 @@ export function dedupeAndRankResults({ engineResults, query, registry }) {
           }) + sourceAuthority.authority_score,
       };
 
+      // Track engine contribution count for this URL
+      const prevCount = urlEngineCount.get(canonicalUrl) || 0;
+      urlEngineCount.set(canonicalUrl, prevCount + 1);
+
       const existing = deduped.get(canonicalUrl);
       if (!existing || candidate.score > existing.score) {
         deduped.set(canonicalUrl, candidate);
@@ -263,7 +271,21 @@ export function dedupeAndRankResults({ engineResults, query, registry }) {
     });
   }
 
+  // Penalize results that only appear in a single low-quality engine
+  // (likely irrelevant / low-quality results that no other engine confirmed)
+  const LOW_PRIORITY_SOLE_PENALTY = -40;
+
   return [...deduped.values()]
+    .map((result) => {
+      const enginePriority = registry[result.engine]?.priority || 0;
+      const engineCount = urlEngineCount.get(result.url) || 1;
+
+      if (engineCount === 1 && enginePriority < LOW_QUALITY_ENGINE_THRESHOLD) {
+        return { ...result, score: result.score + LOW_PRIORITY_SOLE_PENALTY };
+      }
+
+      return result;
+    })
     .sort((left, right) => right.score - left.score)
     .map(({ score, ...result }) => result);
 }

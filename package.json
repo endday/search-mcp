@@ -1,17 +1,20 @@
 {
-  "name": "@yrobot/cf-search-mcp",
-  "version": "1.1.0",
-  "description": "MCP server for Cloudflare Search API - Aggregated search across multiple engines",
+  "name": "@endday/search-mcp",
+  "version": "1.0.1",
+  "description": "MCP server exposing aggregated web search and content extraction tools, backed by a Cloudflare Workers gateway",
   "type": "module",
   "publishConfig": {
     "access": "public"
   },
-  "main": "mcp/cf-search-mcp.js",
+  "main": "mcp/search-mcp.js",
   "bin": {
-    "cf-search-mcp": "./mcp/cf-search-mcp.js"
+    "search-mcp": "./mcp/search-mcp.js"
   },
+  "files": [
+    "mcp"
+  ],
   "scripts": {
-    "start": "node mcp/cf-search-mcp.js",
+    "start": "node mcp/search-mcp.js",
     "test": "node --test test",
     "smoke": "node scripts/smoke-test.js",
     "update:source-authority": "node scripts/update-source-authority.js"
@@ -36,11 +39,11 @@
     "qwant",
     "yahoo"
   ],
-  "author": "Yrobot",
+  "author": "endday",
   "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Yrobot/cloudflare-search.git"
+    "url": "https://github.com/endday/search-mcp.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

@@ -1,6 +1,5 @@
 const createDefaultEnv = () => ({
   DEFAULT_TIMEOUT: "4000",
-  HEDGED_FALLBACK_DELAY_MS: "400",
   SUPPORTED_ENGINES: [
     "startpage",
     "duckduckgo",
@@ -9,8 +8,9 @@ const createDefaultEnv = () => ({
     "yahoo",
     "mojeek",
     "bing",
+    "toutiao",
   ],
-  DEFAULT_ENGINES: ["startpage", "duckduckgo", "brave", "mojeek", "bing"],
+  DEFAULT_ENGINES: ["startpage", "bing", "duckduckgo", "brave", "mojeek"],
   DEFAULT_LANGUAGE: "en",
   FALLBACK_MIN_RESULTS: "6",
   FALLBACK_MIN_CONTRIBUTING_ENGINES: "2",

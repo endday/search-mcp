@@ -4,11 +4,13 @@ const DEFAULT_TIMEOUT_MS = 15000;
 
 function getBaseUrl() {
   const value =
-    process.argv[2] || process.env.SMOKE_BASE_URL || process.env.CF_SEARCH_URL;
+    process.argv[2] ||
+      process.env.SMOKE_BASE_URL ||
+      process.env.SEARCH_MCP_URL;
 
   if (!value) {
     throw new Error(
-      "Provide a target URL as an argument or set SMOKE_BASE_URL/CF_SEARCH_URL"
+      "Provide a target URL as an argument or set SMOKE_BASE_URL/SEARCH_MCP_URL"
     );
   }
 
@@ -16,7 +18,12 @@ function getBaseUrl() {
 }
 
 function getToken() {
-  return process.env.SMOKE_TOKEN || process.env.CF_SEARCH_TOKEN || process.env.TOKEN || "";
+  return (
+    process.env.SMOKE_TOKEN ||
+    process.env.SEARCH_MCP_TOKEN ||
+    process.env.TOKEN ||
+    ""
+  );
 }
 
 async function fetchWithTimeout(url, init = {}) {
@@ -87,7 +94,7 @@ async function main() {
 
   if (!token) {
     console.warn(
-      "No SMOKE_TOKEN/CF_SEARCH_TOKEN/TOKEN provided; skipped protected endpoint checks."
+      "No SMOKE_TOKEN/SEARCH_MCP_TOKEN/TOKEN provided; skipped protected endpoint checks."
     );
     return;
   }

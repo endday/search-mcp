@@ -31,10 +31,10 @@ export function getRateLimitClientKey(request, token) {
   return token ? `token:${token}` : `ip:${clientIp}`;
 }
 
-async function getRateLimitBucketKey(request, token, bucket) {
+async function getRateLimitBucketKey(request, token, bucket, bucketPrefix = RATE_LIMIT_PREFIX) {
   const clientKey = getRateLimitClientKey(request, token);
   const clientHash = await sha256Hex(clientKey);
-  return `${RATE_LIMIT_PREFIX}:${bucket}:${clientHash}`;
+  return `${bucketPrefix}:${bucket}:${clientHash}`;
 }
 
 function createRateLimitError({ maxRequests, windowSeconds, retryAfter }) {
@@ -80,12 +80,13 @@ async function incrementKvBucket({ kv, key, expiresAt, windowSeconds }) {
   return count;
 }
 
-export async function enforceRateLimit(request, token) {
-  const maxRequests = Number.parseInt(env.RATE_LIMIT_MAX_REQUESTS || "0", 10);
-  const windowSeconds = Number.parseInt(
+export async function enforceRateLimit(request, token, options = {}) {
+  const maxRequests = options.maxRequests ?? Number.parseInt(env.RATE_LIMIT_MAX_REQUESTS || "0", 10);
+  const windowSeconds = options.windowSeconds ?? Number.parseInt(
     env.RATE_LIMIT_WINDOW_SECONDS || "60",
     10
   );
+  const bucketPrefix = options.bucketPrefix ?? RATE_LIMIT_PREFIX;
 
   if (maxRequests <= 0 || windowSeconds <= 0) {
     return;
@@ -95,7 +96,7 @@ export async function enforceRateLimit(request, token) {
   const windowMs = windowSeconds * 1000;
   const bucket = Math.floor(now / windowMs);
   const expiresAt = (bucket + 1) * windowMs;
-  const clientKey = await getRateLimitBucketKey(request, token, bucket);
+  const clientKey = await getRateLimitBucketKey(request, token, bucket, bucketPrefix);
   const kv = getStateKv();
 
   if (kv) {

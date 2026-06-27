@@ -261,7 +261,7 @@ async function searchYahoo(params) {
 export const yahooAdapter = {
   name: "yahoo",
   label: "Yahoo",
-  priority: 75,
+  priority: 55,
   supports: {
     language: true,
     time_range: true,

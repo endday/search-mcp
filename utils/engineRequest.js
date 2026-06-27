@@ -1,6 +1,7 @@
 import { ApiError } from "./errors.js";
 import {
-  SEARCH_USER_AGENT,
+  getRandomUserAgent,
+  getRandomBrowserProfile,
   getAcceptLanguageHeader,
 } from "./engineUtils.js";
 
@@ -140,14 +141,26 @@ export function buildEngineRequest(
 ) {
   const requestUrl = new URL(url);
   const requestMethod = String(method || (form ? "POST" : "GET")).toUpperCase();
+  const profile = getRandomBrowserProfile();
   const requestHeaders = normalizeHeaders({
     accept:
       accept ||
-      "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "accept-language": acceptLanguage || getAcceptLanguageHeader(language),
-    "user-agent": userAgent || SEARCH_USER_AGENT,
+    "user-agent": userAgent || profile.ua,
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "none",
+    "sec-fetch-user": "?1",
     ...normalizeHeaders(headers),
   });
+
+  // Chrome Client Hints; Firefox skips these
+  if (profile.secChUa && !requestHeaders["sec-ch-ua"]) {
+    requestHeaders["sec-ch-ua"] = profile.secChUa;
+    requestHeaders["sec-ch-ua-platform"] = profile.secChUaPlatform;
+    requestHeaders["sec-ch-ua-mobile"] = profile.secChUaMobile;
+  }
   const cookieHeader = buildCookieHeader(cookies);
 
   if (cookieHeader) {

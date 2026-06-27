@@ -1,0 +1,511 @@
+utils/getHTML.js | 2017 +++++++++++++++++++++---------------------------------
+ worker.js        |  392 ++---------
+ 2 files changed, 814 insertions(+), 1595 deletions(-)
+
+--- Changes ---
+
+utils/getHTML.js
+  @@ -1,10 +1,6 @@
+  -// ============================================
+  -// HTML 界面 - HTML UI
+  -// ============================================
+  -
+  -export function getSearchHtml() {
+  +export async function getSearchHtml() {
+     const AUTH_REQUIRED = ["1", "true", "yes", "on", "required"].includes(
+       String(env.AUTH_REQUIRED || "").trim().toLowerCase()
+     );
+  @@ -13,1150 +9,782 @@ export function getSearchHtml() {
+  +
+  +  const engines = ["startpage", "duckduckgo", "brave", "qwant", "yahoo", "mojeek", "bing"];
+  +
+     return `<!DOCTYPE html>
+  -<html lang="zh-CN" class="h-full">
+  +<html lang="zh-CN">
+   <head>
+     <meta charset="UTF-8">
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  -  <title>Cloudflare Search - 多引擎聚合搜索服务</title>
+  -  <meta name="description" content="基于 Cloudflare Workers 的多引擎搜索聚合服务,兼容 SearXNG API">
+  +  <title>Cloudflare Search - 多引擎聚合搜索</title>
+  +  <meta name="description" content="基于 Cloudflare Workers 的多引擎聚合搜索服务，为 AI Agent 提供实时 web 搜索能力">
+     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔍</text></svg>">
+  -
+  -  <!-- Tailwind CSS CDN -->
+     <script src="https://cdn.tailwindcss.com"></script>
+     <script>
+       tailwind.config = {
+  +      darkMode: 'media',
+         theme: {
+           extend: {
+  -          colors: {
+  -            zinc: {
+  -              50: '#fafafa',
+  -              100: '#f4f4f5',
+  -              200: '#e4e4e7',
+  -              300: '#d4d4d8',
+  -              400: '#a1a1aa',
+  -              500: '#71717a',
+  -              600: '#52525b',
+  -              700: '#3f3f46',
+  -              800: '#27272a',
+  -              900: '#18181b',
+  -            },
+  -            blue: {
+  -              400: '#60a5fa',
+  -              500: '#3b82f6',
+  -              600: '#2563eb',
+  -            }
+  -          }
+  +          fontFamily: {
+  +            sans: ['Aptos', '"Microsoft YaHei UI"', '"PingFang SC"', 'system-ui', 'sans-serif'],
+  +          },
+           }
+         }
+       }
+     </script>
+  -
+     <style>
+       :root {
+  -      --page-bg: #f6f1e8;
+  -      --surface: #fffdf8;
+  -      --surface-muted: #f1eadf;
+  -      --ink: #20231f;
+  -      --ink-muted: #6f756b;
+  -      --line: #ded5c8;
+  +      --page-bg: #fafaf7;
+  +      --surface: #ffffff;
+  +      --surface-muted: #f5f4ef;
+  +      --ink: #1a1d1a;
+  +      --ink-muted: #6b7268;
+  +      --line: #e5e2d9;
+         --accent: #0f766e;
+         --accent-strong: #115e59;
+  -      --warning: #b45309;
+  -      --danger: #b91c1c;
+  +      --accent-bg: #f0fdfa;
+       }
+  -
+       @media (prefers-color-scheme: dark) {
+         :root {
+  -        --page-bg: #121411;
+  -        --surface: #1b1f1b;
+  -        --surface-muted: #252a25;
+  -        --ink: #f3f1e8;
+  -        --ink-muted: #a9afa4;
+  -        --line: #343a33;
+  +        --page-bg: #0f110f;
+  +        --surface: #181b18;
+  +        --surface-muted: #1f231f;
+  +        --ink: #f1efe6;
+  +        --ink-muted: #9ca39a;
+  +        --line: #2a2f2a;
+           --accent: #5eead4;
+           --accent-strong: #99f6e4;
+  -        --warning: #fbbf24;
+  -        --danger: #f87171;
+  +        --accent-bg: #042f2e;
+         }
+       }
+  -
+       body {
+  -      background:
+  -        linear-gradient(90deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px),
+  -        linear-gradient(0deg, rgba(15, 118, 110, 0.05) 1px, transparent 1px),
+  -        var(--page-bg);
+  -      background-size: 28px 28px;
+  +      background: var(--page-bg);
+         color: var(--ink);
+  ... (1597 lines truncated)
+  @@ -1177,227 +805,91 @@ export function getSearchHtml() {
+  -    async function parseJsonResponse(response) {
+  -      let data = null;
+  -
+  -      try {
+  -        data = await response.json();
+  -      } catch (_) {
+  -        data = null;
+  -      }
+  -
+  -      if (!response.ok) {
+  -        const error = new Error(data?.message || '请求失败 (' + response.status + ')');
+  -        error.status = response.status;
+  -        error.code = data?.code || '';
+  -        error.details = data?.details || null;
+  -        throw error;
+  -      }
+  -
+  -      return data;
+  -    }
+  -
+  -    function buildApiUrl(path, params) {
+  -      const url = new URL(path, currentOrigin);
+  -
+  -      Object.entries(params).forEach(([key, value]) => {
+  -        const normalizedValue = value === undefined || value === null ? '' : String(value).trim();
+  -        if (normalizedValue) {
+  -          url.searchParams.set(key, normalizedValue);
+  -        }
+  -      });
+  -
+  -      return url.toString();
+  -    }
+  -
+  -    async function requestApiJson(path, params) {
+  -      const response = await fetch(buildApiUrl(path, params), {
+  -        headers: getAuthHeaders(),
+  -      });
+  -
+  -      return parseJsonResponse(response);
+  -    }
+  -
+  -    function setButtonBusy(button, busy, label, busyLabel) {
+  -      if (!button) {
+  -        return;
+  -      }
+  -
+  -      button.disabled = busy;
+  -      button.textContent = busy ? busyLabel : label;
+  -    }
+  -
+  -    function renderJsonOutput(element, payload) {
+  -      if (!element) {
+  -        return;
+  -      }
+  -
+  -      element.textContent = JSON.stringify(payload, null, 2);
+  -    }
+  -
+  -    function setupApiTestForm({
+  -      formId,
+  -      buttonId,
+  -      statusId,
+  -      outputId,
+  -      buttonLabel,
+  -      busyLabel,
+  -      path,
+  -      getParams,
+  -      successMessage,
+  -    }) {
+  +    // API test form helper
+  +    function setupApiTestForm({ formId, buttonId, statusId, outputId, buttonLabel, busyLabel, path, getParams, successMessage }) {
+         const form = document.getElementById(formId);
+         const button = document.getElementById(buttonId);
+         const status = document.getElementById(statusId);
+         const output = document.getElementById(outputId);
+  -
+  -      if (!form) {
+  -        return;
+  -      }
+  +      if (!form) return;
+   
+         form.addEventListener('submit', async (event) => {
+           event.preventDefault();
+  -        setButtonBusy(button, true, buttonLabel, busyLabel);
+  -        setMessage(status, 'loading', '正在请求接口...');
+  +        button.disabled = true;
+  +        button.textContent = busyLabel;
+  +        setMessage(status, 'loading', '请求中...');
+   
+           try {
+  -          const payload = await requestApiJson(path, getParams());
+  -          renderJsonOutput(output, payload);
+  +          const params = getParams();
+  +          const url = new URL(path, currentOrigin);
+  +          Object.entries(params).forEach(([key, value]) => {
+  +            const normalized = value === undefined || value === null ? '' : String(value).trim();
+  +            if (normalized) url.searchParams.set(key, normalized);
+  +          });
+  +          const response = await fetch(url.toString(), { headers: getAuthHeaders() });
+  +          const payload = await parseJsonResponse(response);
+  ... (119 lines truncated)
+  @@ -1405,57 +897,51 @@ export function getSearchHtml() {
+  +    // Main search
+       document.getElementById('searchForm').addEventListener('submit', async function(event) {
+         event.preventDefault();
+  -
+         const query = document.getElementById('searchQuery').value.trim();
+         if (!query) return;
+  -
+  -      // 获取选中的搜索引擎 (非必填)
+  -      const engines = Array.from(document.querySelectorAll('input[name="engine"]:checked:not(:disabled)'))
+  -        .map(cb => cb.value)
+  -        .join(',');
+  +      const engines = Array.from(document.querySelectorAll('input[name="engine"]:checked')).map((cb) => cb.value).join(',');
+         const location = locationInput ? locationInput.value.trim() : '';
+   
+  -      // 显示加载状态
+         const searchBtn = document.getElementById('searchBtn');
+         const originalText = searchBtn.textContent;
+  -      setMessage(searchStatus, 'loading', '正在请求搜索服务...');
+  +      setMessage(searchStatus, 'loading', '搜索中...');
+         searchBtn.textContent = '搜索中...';
+         searchBtn.disabled = true;
+   
+         try {
+           let url = \`\${currentOrigin}/search?q=\${encodeURIComponent(query)}\`;
+           if (engines) url += \`&engines=\${engines}\`;
+  -        if (location) url += \`&location=\${encodeURIComponent(location)}\`;
+  +        if (location && location !== 'off') url += \`&location=\${encodeURIComponent(location)}\`;
+   
+  -        const response = await fetch(url, {
+  -          headers: getAuthHeaders(),
+  -        });
+  +        const response = await fetch(url, { credentials: 'same-origin' });
+           const data = await parseJsonResponse(response);
+   
+           if (TOKEN_ENABLED && getCurrentToken()) {
+             localStorage.setItem(tokenStorageKey, getCurrentToken());
+             setTokenBadge('success', '已通过');
+  -          setMessage(tokenStatusText, 'success', 'Token 校验通过，已用于本次搜索。', 'text-xs');
+           }
+   
+           displayResults(data);
+  -        setMessage(searchStatus, 'success', \`搜索完成，共返回 \${data.number_of_results} 条结果。\`);
+  +        setMessage(searchStatus, 'success', \`搜索完成，共 \${data.number_of_results} 条结果\`);
+         } catch (error) {
+           if (TOKEN_ENABLED && isAuthError(error)) {
+             setTokenBadge('error', '未通过');
+  -          setMessage(tokenStatusText, 'error', error.message, 'text-xs');
+  +          setMessage(tokenStatusText, 'error', error.message);
+  +        }
+  +        if (error.code === 'SESSION_REQUIRED') {
+  +          setMessage(searchStatus, 'error', '会话已过期，请刷新页面后重试。');
+  +        } else {
+  +          setMessage(searchStatus, 'error', error.message);
+           }
+  -
+  -        setMessage(searchStatus, 'error', error.message);
+         } finally {
+           searchBtn.textContent = originalText;
+           searchBtn.disabled = false;
+         }
+       });
+   
+  -    // 显示搜索结果
+       function displayResults(data) {
+         const resultsSection = document.getElementById('resultsSection');
+         const resultsContainer = document.getElementById('results');
+  @@ -1468,63 +954,100 @@ export function getSearchHtml() {
+  -          const item = createElement(
+  -            'div',
+  -            'rounded-lg bg-zinc-50 p-4 overflow-scroll dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition'
+  -          );
+  -          const row = createElement('div', 'flex items-start justify-between');
+  -          const body = createElement('div', 'flex-1 overflow-hidden');
+  -          const title = createElement(
+  -            'a',
+  -            'text-base font-medium text-blue-600 dark:text-blue-400 hover:underline',
+  -            result.title || '无标题'
+  -          );
+  -          const urlText = createElement(
+  -            'p',
+  -            'text-xs text-zinc-500 dark:text-zinc-500 mt-1',
+  -            safeUrl || String(result.url || '')
+  -          );
+  -          const description = createElement(
+  -            'p',
+  -            'text-sm text-zinc-700 dark:text-zinc-300 mt-2',
+  -            result.description || '暂无描述'
+  -          );
+  -          const engine = createElement(
+  -            'span',
+  -            'ml-4 text-xs text-zinc-500 dark:text-zinc-500 bg-zinc-200 dark:bg-zinc-700 px-2 py-1 rounded',
+  -            result.engine || 'unknown'
+  -          );
+  +          const item = createElement('div', 'result-item');
+  +
+  +          const header = createElement('div', 'flex items-start justify-between gap-3');
+  +          const body = createElement('div', 'flex-1 min-w-0');
+  +          const title = createElement('a', 'font-medium hover:underline block truncate', result.title || '无标题');
+  +          title.style.color = 'var(--accent)';
+  +          const urlText = createElement('p', 'text-xs truncate mt-0.5', safeUrl || String(result.url || ''));
+  +          urlText.style.color = 'var(--ink-muted)';
+  +          const description = createElement('p', 'text-sm mt-2 leading-relaxed', result.description || '暂无描述');
+  +
+  +          const actions = createElement('div', 'flex-shrink-0 flex flex-col gap-2 items-end');
+  +          const engine = createElement('span', 'text-xs px-2 py-0.5 rounded-full', result.engine || 'unknown');
+  +          engine.style.cssText = 'background: var(--surface-muted); color: var(--ink-muted)';
+   
+             if (safeUrl) {
+               title.href = safeUrl;
+               title.target = '_blank';
+               title.rel = 'noopener noreferrer';
+  +
+  +            const readBtn = createElement('button', 'read-btn', '阅读正文');
+  +            readBtn.addEventListener('click', () => openReaderModal(safeUrl, result.title));
+  +            actions.append(engine, readBtn);
+             } else {
+               title.href = '#';
+  -            title.setAttribute('aria-disabled', 'true');
+  +            actions.appendChild(engine);
+             }
+   
+             body.append(title, urlText, description);
+  -          row.append(body, engine);
+  -          item.appendChild(row);
+  +          header.append(body, actions);
+  +          item.appendChild(header);
+             resultsContainer.appendChild(item);
+           });
+         } else {
+           resultsContainer.appendChild(
+  -          createElement('p', 'text-center text-zinc-500 dark:text-zinc-400', '没有找到相关结果')
+  +          createElement('p', 'text-center py-8', '没有找到相关结果')
+           );
+  +        resultsContainer.lastChild.style.color = 'var(--ink-muted)';
+         }
+   
+  -      // 滚动到结果区域
+         resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+       }
+   
+  -    // 清除结果
+       document.getElementById('clearBtn').addEventListener('click', function() {
+         document.getElementById('resultsSection').classList.add('hidden');
+         clearChildren(document.getElementById('results'));
+         setMessage(searchStatus, 'info', '');
+       });
+  +
+  +    // Reader modal
+  +    const readerModal = document.getElementById('readerModal');
+  +    const readerModalTitle = document.getElementById('readerModalTitle');
+  +    const readerModalBody = document.getElementById('readerModalBody');
+  +    const readerModalClose = document.getElementById('readerModalClose');
+  +
+  +    async function openReaderModal(url, title) {
+  +      readerModalTitle.textContent = title || '加载中...';
+  +      readerModalBody.innerHTML = '<p style="color: var(--ink-muted)">正在读取正文...</p>';
+  +      readerModal.classList.add('active');
+  +
+  +      try {
+  +        const response = await fetch(\`\${currentOrigin}/content?url=\${encodeURIComponent(url)}\`, { credentials: 'same-origin' });
+  +        const data = await parseJsonResponse(response);
+  +
+  +        readerModalTitle.textContent = data.title || title || '无标题';
+  +
+  +        const meta = [];
+  +        if (data.metadata?.author) meta.push(\`作者: \${data.metadata.author}\`);
+  +        if (data.metadata?.published_time) meta.push(\`发布时间: \${data.metadata.published_time}\`);
+  ... (26 lines truncated)
+  +770 -1247
+
+worker.js
+  @@ -3,6 +3,8 @@ import { ApiError, normalizeError, toErrorPayload } from "./utils/errors.js";
+  +import { createSession, validateSession } from "./utils/session.js";
+  +import { authenticateRequest, getRateLimitKey, getRequestToken, getRateLimitToken, isAuthRequired } from "./utils/auth.js";
+   import { searchAllWithMeta } from "./utils/searchGateway.js";
+   
+   const ALLOWED_METHODS = "GET, POST, OPTIONS";
+  @@ -10,9 +12,6 @@ const TARGET_FETCH_USER_AGENT =
+  -const MIN_RESEARCH_TEXT_LENGTH = 240;
+  -const MAX_RESEARCH_LINK_DENSITY = 0.65;
+  -const RESEARCH_SOURCE_CONCURRENCY = 3;
+   
+   function buildCorsHeaders(request) {
+     const headers = {
+  @@ -77,56 +76,6 @@ function buildSearchResponseHeaders({ requestId, durationMs, meta }) {
+  -function getBearerToken(request) {
+  -  return request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+  -}
+  -
+  -function getRequestToken(request, paramToken) {
+  -  return getBearerToken(request) || request.headers.get("x-api-key") || paramToken;
+  -}
+  -
+  -function isTruthyConfig(value) {
+  -  return ["1", "true", "yes", "on", "required"].includes(
+  -    String(value || "").trim().toLowerCase()
+  -  );
+  -}
+  -
+  -function isAuthRequired() {
+  -  return !!env.TOKEN || isTruthyConfig(env.AUTH_REQUIRED);
+  -}
+  -
+  -function ensureAuthConfigured() {
+  -  if (isTruthyConfig(env.AUTH_REQUIRED) && !env.TOKEN) {
+  -    throw new ApiError({
+  -      status: 503,
+  -      code: "AUTH_TOKEN_NOT_CONFIGURED",
+  -      category: "configuration",
+  -      message:
+  -        "AUTH_REQUIRED is enabled but TOKEN is not configured. Set TOKEN as a Cloudflare Worker secret before deploying publicly.",
+  -    });
+  -  }
+  -}
+  -
+  -function isAuthorizedToken(requestToken) {
+  -  if (!isAuthRequired()) {
+  -    return true;
+  -  }
+  -
+  -  return !!env.TOKEN && requestToken === env.TOKEN;
+  -}
+  -
+  -function verifyToken(requestToken) {
+  -  return isAuthorizedToken(requestToken);
+  -}
+  -
+  -function getRateLimitToken(requestToken) {
+  -  if (!isAuthRequired()) {
+  -    return null;
+  -  }
+  -
+  -  return isAuthorizedToken(requestToken) ? requestToken : null;
+  -}
+  -
+   async function parsePostParams(request) {
+     const contentType = request.headers.get("content-type") || "";
+   
+  @@ -218,20 +167,6 @@ function normalizeContentMaxBytes(params) {
+  -function normalizeResearchLimit(value) {
+  -  return normalizePositiveInteger(value, 3, {
+  -    min: 1,
+  -    max: 5,
+  -  });
+  -}
+  -
+  -function normalizeExcerptChars(value) {
+  -  return normalizePositiveInteger(value, 1200, {
+  -    min: 200,
+  -    max: 4000,
+  -  });
+  -}
+  -
+   function normalizeSourceTypeList(value) {
+     const items = Array.isArray(value)
+       ? value
+  @@ -822,17 +757,16 @@ function resolveSearchLanguage(params, query) {
+  -  const requestToken = getRequestToken(request, params.token);
+  +  const authResult = await authenticateRequest(request, params);
+   
+  -  ensureAuthConfigured();
+  -  await enforceRateLimit(request, getRateLimitToken(requestToken));
+  +  await enforceRateLimit(request, getRateLimitKey(authResult));
+   
+  -  if (!verifyToken(requestToken)) {
+  +  if (!authResult.authenticated) {
+       throw new ApiError({
+         status: 401,
+         code: "UNAUTHORIZED",
+         category: "auth",
+  -      message: "Invalid or missing authentication token",
+  +      message: "Authentication required. Provide a valid token or session cookie.",
+       });
+     }
+   
+  @@ -841,6 +775,7 @@ async function handleAuthVerify(request, params, requestId) {
+  +      auth_method: authResult.method,
+       },
+       200,
+       {
+  @@ -849,9 +784,8 @@ async function handleAuthVerify(request, params, requestId) {
+  -async function handleSearch(request, params, requestId) {
+  +async function executeSearch(request, params, requestId) {
+     const query = String(params.q || params.query || "").trim();
+  -  const requestToken = getRequestToken(request, params.token);
+
+... (more changes truncated)
+  +8 -74
+[full diff: rtk git diff --no-compact]

@@ -121,7 +121,7 @@ async function fetchWithRetries(url, init) {
 async function fetchText(url) {
   const response = await fetchWithRetries(url, {
     headers: {
-      "User-Agent": "cloudflare-search-source-authority-updater/1.0",
+      "User-Agent": "search-mcp-source-authority-updater/1.0",
     },
   });
 
@@ -136,7 +136,7 @@ async function fetchJson(url) {
   const response = await fetchWithRetries(url, {
     headers: {
       Accept: "application/json",
-      "User-Agent": "cloudflare-search-source-authority-updater/1.0",
+      "User-Agent": "search-mcp-source-authority-updater/1.0",
     },
   });
 

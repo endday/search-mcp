@@ -3,11 +3,10 @@ import { getCachedSearchResponse, setCachedSearchResponse } from "./cache.js";
 import { ApiError, normalizeError } from "./errors.js";
 import { getEngineRegistry, resolveEngineSelection } from "./engineRegistry.js";
 import {
-  prioritizeHealthyEngines,
   recordEngineFailure,
   recordEngineSuccess,
 } from "./health.js";
-import { dedupeAndRankResults } from "./index.js";
+import { dedupeAndRankResults, canonicalizeUrl } from "./index.js";
 
 function parseNonNegativeInt(value, fallback) {
   const parsed = Number.parseInt(value ?? String(fallback), 10);
@@ -131,39 +130,9 @@ function abortActiveSearches(activeSearches) {
   }
 }
 
-async function waitForEngineOrHedge({
-  activeSearches,
-  canHedge,
-  hedgeDelayMs,
-}) {
-  const completionPromises = [...activeSearches.values()].map((task) =>
-    task.promise.then((outcome) => ({
-      type: "complete",
-      outcome,
-    }))
-  );
-
-  if (!canHedge || hedgeDelayMs <= 0) {
-    return Promise.race(completionPromises);
-  }
-
-  let timerId;
-  const hedgePromise = new Promise((resolve) => {
-    timerId = setTimeout(() => resolve({ type: "hedge" }), hedgeDelayMs);
-  });
-  const result = await Promise.race([...completionPromises, hedgePromise]);
-
-  if (result.type === "complete") {
-    clearTimeout(timerId);
-  }
-
-  return result;
-}
-
-async function runFallbackSearch({
+async function runParallelSearch({
   registry,
-  fallbackOrder,
-  primaryEngine,
+  engines,
   query,
   language,
   time_range,
@@ -173,23 +142,14 @@ async function runFallbackSearch({
     1,
     Number.parseInt(env.FALLBACK_MIN_RESULTS || "6", 10)
   );
-  const hedgeDelayMs = parseNonNegativeInt(env.HEDGED_FALLBACK_DELAY_MS, 400);
   const minContributingEngines = Math.min(
-    fallbackOrder.length,
+    engines.length,
     parsePositiveInt(env.FALLBACK_MIN_CONTRIBUTING_ENGINES, 2)
   );
-  const activeSearches = new Map();
-  const engineResults = [];
-  const unresponsiveEngines = [];
-  const fallbackPath = [];
-  const engineTimings = [];
-  let aggregatedResults = [];
-  let nextEngineIndex = 0;
 
-  const startNextEngine = () => {
-    const engineName = fallbackOrder[nextEngineIndex];
-    nextEngineIndex += 1;
-    fallbackPath.push(engineName);
+  // Start every requested engine in parallel — no priority, no hedging.
+  const activeSearches = new Map();
+  for (const engineName of engines) {
     activeSearches.set(
       engineName,
       startEngineSearch(registry[engineName], {
@@ -199,35 +159,25 @@ async function runFallbackSearch({
         pageno,
       })
     );
-  };
+  }
 
-  const hasSecondaryContribution = () =>
-    engineResults.some(({ engine }) => engine !== primaryEngine);
-  const hasEnoughContributors = () =>
-    engineResults.length >= minContributingEngines || hasSecondaryContribution();
+  const engineResults = [];
+  const unresponsiveEngines = [];
+  const engineTimings = [];
+  // Every requested engine was started, so the "path" is the full set.
+  const fallbackPath = [...engines];
+  const canonicalUrls = new Set();
+
   const hasEnoughResults = () =>
-    aggregatedResults.length >= minResults && hasEnoughContributors();
+    canonicalUrls.size >= minResults &&
+    engineResults.length >= minContributingEngines;
 
-  while (
-    !hasEnoughResults() &&
-    (activeSearches.size > 0 || nextEngineIndex < fallbackOrder.length)
-  ) {
-    if (activeSearches.size === 0) {
-      startNextEngine();
-    }
+  while (activeSearches.size > 0 && !hasEnoughResults()) {
+    const completionPromises = [...activeSearches.values()].map((task) =>
+      task.promise
+    );
+    const outcome = await Promise.race(completionPromises);
 
-    const result = await waitForEngineOrHedge({
-      activeSearches,
-      canHedge: nextEngineIndex < fallbackOrder.length,
-      hedgeDelayMs,
-    });
-
-    if (result.type === "hedge") {
-      startNextEngine();
-      continue;
-    }
-
-    const { outcome } = result;
     activeSearches.delete(outcome.engine);
     engineTimings.push({
       engine: outcome.engine,
@@ -240,28 +190,32 @@ async function runFallbackSearch({
       console.warn(`[${outcome.engine}] ${outcome.error.code}: ${outcome.error.message}`);
       await recordEngineFailure(outcome.engine);
       unresponsiveEngines.push(outcome.engine);
-      continue;
+    } else {
+      await recordEngineSuccess(outcome.engine);
+
+      if (outcome.results.length > 0) {
+        engineResults.push({
+          engine: outcome.engine,
+          results: outcome.results,
+        });
+        // Track canonical URLs for early-stop check
+        for (const result of outcome.results) {
+          canonicalUrls.add(canonicalizeUrl(result.url || result.link || result.href || ""));
+        }
+      }
     }
-
-    await recordEngineSuccess(outcome.engine);
-
-    if (outcome.results.length > 0) {
-      engineResults.push({
-        engine: outcome.engine,
-        results: outcome.results,
-      });
-    }
-
-    aggregatedResults = dedupeAndRankResults({
-      engineResults,
-      query,
-      registry,
-    });
   }
 
   if (hasEnoughResults()) {
     abortActiveSearches(activeSearches);
   }
+
+  // Dedupe and rank once, after all collected results
+  const aggregatedResults = dedupeAndRankResults({
+    engineResults,
+    query,
+    registry,
+  });
 
   return {
     results: aggregatedResults,
@@ -326,11 +280,10 @@ export async function searchAllWithMeta({
     };
   }
 
-  const fallbackOrder = await prioritizeHealthyEngines(enabledEngines);
-  const searchOutcome = await runFallbackSearch({
+  const fallbackOrder = enabledEngines;
+  const searchOutcome = await runParallelSearch({
     registry,
-    fallbackOrder,
-    primaryEngine: enabledEngines[0],
+    engines: fallbackOrder,
     query,
     language,
     time_range,

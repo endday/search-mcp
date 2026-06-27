@@ -1,18 +1,23 @@
 import { env, setEnv } from "./envs.js";
 import { ApiError, normalizeError, toErrorPayload } from "./utils/errors.js";
 import { getSearchHtml } from "./utils/getHTML.js";
+import { getDocsHtml } from "./utils/getDocsHtml.js";
 import { extractPageContent } from "./utils/pageExtract.js";
-import { enforceRateLimit } from "./utils/rateLimit.js";
+import { createSession, validateSession } from "./utils/session.js";
+import { isAuthRequired, requireAuth, matchesConfigSet } from "./utils/auth.js";
 import { searchAllWithMeta } from "./utils/searchGateway.js";
+import { getRandomBrowserProfile } from "./utils/engineUtils.js";
+
+function attachSessionCookie(response, authResult) {
+  if (authResult.method === "session" && authResult.setCookie) {
+    response.headers.set("Set-Cookie", authResult.setCookie);
+  }
+  return response;
+}
 
 const ALLOWED_METHODS = "GET, POST, OPTIONS";
-const TARGET_FETCH_USER_AGENT =
-  "Mozilla/5.0 (compatible; CloudflareSearchReader/1.0; +https://workers.cloudflare.com/)";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_SAFE_REDIRECTS = 5;
-const MIN_RESEARCH_TEXT_LENGTH = 240;
-const MAX_RESEARCH_LINK_DENSITY = 0.65;
-const RESEARCH_SOURCE_CONCURRENCY = 3;
 
 function buildCorsHeaders(request) {
   const headers = {
@@ -75,56 +80,6 @@ function buildSearchResponseHeaders({ requestId, durationMs, meta }) {
   }
 
   return headers;
-}
-
-function getBearerToken(request) {
-  return request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-}
-
-function getRequestToken(request, paramToken) {
-  return getBearerToken(request) || request.headers.get("x-api-key") || paramToken;
-}
-
-function isTruthyConfig(value) {
-  return ["1", "true", "yes", "on", "required"].includes(
-    String(value || "").trim().toLowerCase()
-  );
-}
-
-function isAuthRequired() {
-  return !!env.TOKEN || isTruthyConfig(env.AUTH_REQUIRED);
-}
-
-function ensureAuthConfigured() {
-  if (isTruthyConfig(env.AUTH_REQUIRED) && !env.TOKEN) {
-    throw new ApiError({
-      status: 503,
-      code: "AUTH_TOKEN_NOT_CONFIGURED",
-      category: "configuration",
-      message:
-        "AUTH_REQUIRED is enabled but TOKEN is not configured. Set TOKEN as a Cloudflare Worker secret before deploying publicly.",
-    });
-  }
-}
-
-function isAuthorizedToken(requestToken) {
-  if (!isAuthRequired()) {
-    return true;
-  }
-
-  return !!env.TOKEN && requestToken === env.TOKEN;
-}
-
-function verifyToken(requestToken) {
-  return isAuthorizedToken(requestToken);
-}
-
-function getRateLimitToken(requestToken) {
-  if (!isAuthRequired()) {
-    return null;
-  }
-
-  return isAuthorizedToken(requestToken) ? requestToken : null;
 }
 
 async function parsePostParams(request) {
@@ -215,20 +170,6 @@ function normalizeContentMaxBytes(params) {
   return normalizePositiveInteger(params.max_bytes || params.maxBytes, 1_500_000, {
     min: 50_000,
     max: 5_000_000,
-  });
-}
-
-function normalizeResearchLimit(value) {
-  return normalizePositiveInteger(value, 3, {
-    min: 1,
-    max: 5,
-  });
-}
-
-function normalizeExcerptChars(value) {
-  return normalizePositiveInteger(value, 1200, {
-    min: 200,
-    max: 4000,
   });
 }
 
@@ -584,7 +525,7 @@ async function verifySafeRedirectChain(targetUrl) {
     headers: {
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       Range: "bytes=0-0",
-      "User-Agent": TARGET_FETCH_USER_AGENT,
+      "User-Agent": getRandomBrowserProfile().ua,
     },
   });
 
@@ -652,11 +593,24 @@ async function readResponseTextWithLimit(response, maxBytes) {
 
 async function fetchReadableContent(targetUrl, maxBytes) {
   const normalizedTargetUrl = normalizeTargetUrl(targetUrl);
+  const profile = getRandomBrowserProfile();
+  const contentHeaders = {
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": profile.ua,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+  };
+  if (profile.secChUa) {
+    contentHeaders["Sec-Ch-Ua"] = profile.secChUa;
+    contentHeaders["Sec-Ch-Ua-Platform"] = profile.secChUaPlatform;
+    contentHeaders["Sec-Ch-Ua-Mobile"] = profile.secChUaMobile;
+  }
+
   const upstreamResponse = await fetchWithSafeRedirects(normalizedTargetUrl, {
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "User-Agent": TARGET_FETCH_USER_AGENT,
-    },
+    headers: contentHeaders,
   });
   const contentType = upstreamResponse.headers.get("content-type") || "";
 
@@ -704,10 +658,10 @@ function normalizeLocationValue(value) {
   return normalized || "off";
 }
 
+const DISABLED_LOCATION_VALUES = ["0", "false", "none", "off", "disable", "disabled"];
+
 function isLocationDisabled(value) {
-  return ["0", "false", "none", "off", "disable", "disabled"].includes(
-    String(value || "").trim().toLowerCase()
-  );
+  return matchesConfigSet(value, DISABLED_LOCATION_VALUES);
 }
 
 function getClientLocation(request) {
@@ -822,36 +776,27 @@ function resolveSearchLanguage(params, query) {
 }
 
 async function handleAuthVerify(request, params, requestId) {
-  const requestToken = getRequestToken(request, params.token);
+  // Fix #5 + #8: Use unified requireAuth helper (rate limit first, then auth)
+  const authResult = await requireAuth(request, params);
 
-  ensureAuthConfigured();
-  await enforceRateLimit(request, getRateLimitToken(requestToken));
-
-  if (!verifyToken(requestToken)) {
-    throw new ApiError({
-      status: 401,
-      code: "UNAUTHORIZED",
-      category: "auth",
-      message: "Invalid or missing authentication token",
-    });
-  }
-
-  return jsonResponse(
+  const response = jsonResponse(
     request,
     {
       authorized: true,
       token_required: isAuthRequired(),
+      auth_method: authResult.method,
     },
     200,
     {
       "X-Search-Request-Id": requestId,
     }
   );
+
+  return attachSessionCookie(response, authResult);
 }
 
-async function handleSearch(request, params, requestId) {
+async function executeSearch(request, params, requestId) {
   const query = String(params.q || params.query || "").trim();
-  const requestToken = getRequestToken(request, params.token);
   const startedAt = Date.now();
 
   if (!query) {
@@ -863,15 +808,14 @@ async function handleSearch(request, params, requestId) {
     });
   }
 
-  ensureAuthConfigured();
-  await enforceRateLimit(request, getRateLimitToken(requestToken));
-
-  if (!verifyToken(requestToken)) {
+  const engines = normalizeEngineParam(params.engines);
+  if (!engines || engines.length === 0) {
     throw new ApiError({
-      status: 401,
-      code: "UNAUTHORIZED",
-      category: "auth",
-      message: "Invalid or missing authentication token",
+      status: 400,
+      code: "MISSING_ENGINES",
+      category: "validation",
+      message:
+        "Please provide the 'engines' parameter (e.g. engines=startpage,bing). At least one engine is required.",
     });
   }
 
@@ -881,7 +825,7 @@ async function handleSearch(request, params, requestId) {
 
   const { response, meta } = await searchAllWithMeta({
     query: effectiveQuery,
-    engines: normalizeEngineParam(params.engines),
+    engines,
     language: resolveSearchLanguage(params, query),
     time_range: normalizeTimeRange(params.time_range || params.timeRange),
     pageno: normalizePageNumber(params.pageno || params.page),
@@ -908,252 +852,13 @@ async function handleSearch(request, params, requestId) {
   );
 }
 
-function createResearchSource({
-  result,
-  index,
-  content,
-  excerptChars,
-}) {
-  const text = String(content.text || content.excerpt || "");
+async function handleSearch(request, params, requestId) {
+  // Fix #8: Use unified requireAuth helper (eliminates boilerplate)
+  const authResult = await requireAuth(request, params);
 
-  return {
-    ...getResearchSourceBase(result, index),
-    status: "ok",
-    title: content.title || result.title,
-    source_title: content.title || "",
-    source_description: content.description || "",
-    extractor: content.extractor || null,
-    metadata: content.metadata || {},
-    excerpt: text.slice(0, excerptChars),
-    stats: content.stats || null,
-  };
-}
+  const response = await executeSearch(request, params, requestId);
 
-function getResearchSourceBase(result, index) {
-  return {
-    index: index + 1,
-    title: result.title,
-    url: result.url,
-    engine: result.engine,
-    source_type: result.source_type || "unknown",
-    authority_score: Number.isFinite(result.authority_score)
-      ? result.authority_score
-      : 0,
-    description: result.description,
-  };
-}
-
-function getResearchContentQuality(content) {
-  const textLength = String(content.text || content.excerpt || "").trim().length;
-  const paragraphCount = content.stats?.paragraph_count ?? 0;
-  const linkDensity = content.stats?.link_density ?? 0;
-
-  if (textLength < MIN_RESEARCH_TEXT_LENGTH) {
-    return {
-      ok: false,
-      code: "LOW_CONTENT",
-      message: `Extracted text is shorter than ${MIN_RESEARCH_TEXT_LENGTH} characters`,
-    };
-  }
-
-  if (paragraphCount === 0 && textLength < MIN_RESEARCH_TEXT_LENGTH * 2) {
-    return {
-      ok: false,
-      code: "LOW_CONTENT",
-      message: "Extracted content does not contain enough readable paragraphs",
-    };
-  }
-
-  if (linkDensity > MAX_RESEARCH_LINK_DENSITY && paragraphCount < 2) {
-    return {
-      ok: false,
-      code: "LOW_CONTENT",
-      message: "Extracted content appears to be navigation or link-heavy text",
-    };
-  }
-
-  return {
-    ok: true,
-  };
-}
-
-function createResearchSkippedSource({ result, index, content, quality }) {
-  return {
-    ...getResearchSourceBase(result, index),
-    status: "skipped",
-    source_title: content.title || "",
-    source_description: content.description || "",
-    extractor: content.extractor || null,
-    metadata: content.metadata || {},
-    stats: content.stats || null,
-    reason: {
-      code: quality.code,
-      category: "quality",
-      message: quality.message,
-    },
-  };
-}
-
-function createResearchErrorSource({ result, index, error }) {
-  const normalized = normalizeError(error);
-
-  return {
-    ...getResearchSourceBase(result, index),
-    status: "error",
-    error: {
-      code: normalized.code,
-      category: normalized.category,
-      message: normalized.message,
-      status: normalized.status || 500,
-    },
-  };
-}
-
-async function readResearchSource(result, index, { maxBytes, excerptChars }) {
-  try {
-    const content = await fetchReadableContent(result.url, maxBytes);
-    const quality = getResearchContentQuality(content);
-
-    if (!quality.ok) {
-      return createResearchSkippedSource({
-        result,
-        index,
-        content,
-        quality,
-      });
-    }
-
-    return createResearchSource({
-      result,
-      index,
-      content,
-      excerptChars,
-    });
-  } catch (error) {
-    return createResearchErrorSource({
-      result,
-      index,
-      error,
-    });
-  }
-}
-
-async function readResearchSources(results, { limit, maxBytes, excerptChars }) {
-  const sources = [];
-  let nextIndex = 0;
-  let readCount = 0;
-
-  while (nextIndex < results.length && readCount < limit) {
-    const remainingNeeded = limit - readCount;
-    const batchSize = Math.min(
-      RESEARCH_SOURCE_CONCURRENCY,
-      remainingNeeded,
-      results.length - nextIndex
-    );
-    const batch = Array.from({ length: batchSize }, () => {
-      const index = nextIndex;
-      nextIndex += 1;
-
-      return readResearchSource(results[index], index, {
-        maxBytes,
-        excerptChars,
-      });
-    });
-    const batchSources = await Promise.all(batch);
-
-    sources.push(...batchSources);
-    readCount += batchSources.filter((source) => source.status === "ok").length;
-  }
-
-  return sources;
-}
-
-async function handleResearch(request, params, requestId) {
-  const query = String(params.q || params.query || "").trim();
-  const requestToken = getRequestToken(request, params.token);
-  const startedAt = Date.now();
-
-  if (!query) {
-    throw new ApiError({
-      status: 400,
-      code: "MISSING_QUERY",
-      category: "validation",
-      message: "Please provide 'q' or 'query' parameter",
-    });
-  }
-
-  ensureAuthConfigured();
-  await enforceRateLimit(request, getRateLimitToken(requestToken));
-
-  if (!verifyToken(requestToken)) {
-    throw new ApiError({
-      status: 401,
-      code: "UNAUTHORIZED",
-      category: "auth",
-      message: "Invalid or missing authentication token",
-    });
-  }
-
-  const locationContext = resolveLocationContext(request, params);
-  const effectiveQuery = appendLocationToQuery(query, locationContext.value);
-  const sourceFilters = normalizeSourceFilters(params);
-  const limit = normalizeResearchLimit(params.limit);
-  const excerptChars = normalizeExcerptChars(
-    params.excerpt_chars || params.excerptChars
-  );
-  const maxBytes = normalizeContentMaxBytes(params);
-  const { response, meta } = await searchAllWithMeta({
-    query: effectiveQuery,
-    engines: normalizeEngineParam(params.engines),
-    language: resolveSearchLanguage(params, query),
-    time_range: normalizeTimeRange(params.time_range || params.timeRange),
-    pageno: normalizePageNumber(params.pageno || params.page),
-  });
-  const filteredResponse = applySourceFilters(response, sourceFilters);
-  const sources = await readResearchSources(filteredResponse.results, {
-    limit,
-    maxBytes,
-    excerptChars,
-  });
-  const readCount = sources.filter((source) => source.status === "ok").length;
-  const failedCount = sources.filter((source) => source.status === "error").length;
-  const skippedCount = sources.filter(
-    (source) => source.status === "skipped"
-  ).length;
-  const durationMs = Date.now() - startedAt;
-  const responsePayload = {
-    ...filteredResponse,
-    query,
-    effective_query: effectiveQuery,
-    location: locationContext.value || null,
-    location_source: locationContext.source,
-    location_context: locationContext,
-    limit,
-    excerpt_chars: excerptChars,
-    max_bytes: maxBytes,
-    attempted_count: sources.length,
-    read_count: readCount,
-    failed_count: failedCount,
-    skipped_count: skippedCount,
-    duration_ms: durationMs,
-    sources,
-  };
-
-  return jsonResponse(
-    request,
-    responsePayload,
-    200,
-    {
-      ...buildSearchResponseHeaders({
-        requestId,
-        durationMs,
-        meta,
-      }),
-      "X-Research-Read-Count": String(readCount),
-      "X-Research-Failed-Count": String(failedCount),
-      "X-Research-Skipped-Count": String(skippedCount),
-    }
-  );
+  return attachSessionCookie(response, authResult);
 }
 
 function getBrowserRenderingConfig() {
@@ -1234,20 +939,10 @@ function normalizeMarkdownResult(payload) {
 
 async function handleMarkdown(request, params, requestId) {
   const targetUrl = normalizeTargetUrl(params.url);
-  const requestToken = getRequestToken(request, params.token);
   const startedAt = Date.now();
 
-  ensureAuthConfigured();
-  await enforceRateLimit(request, getRateLimitToken(requestToken));
-
-  if (!verifyToken(requestToken)) {
-    throw new ApiError({
-      status: 401,
-      code: "UNAUTHORIZED",
-      category: "auth",
-      message: "Invalid or missing authentication token",
-    });
-  }
+  // Fix #8: Use unified requireAuth helper (eliminates boilerplate)
+  const authResult = await requireAuth(request, params);
 
   const { accountId, apiToken } = getBrowserRenderingConfig();
   await verifySafeRedirectChain(targetUrl);
@@ -1294,7 +989,7 @@ async function handleMarkdown(request, params, requestId) {
 
   const result = normalizeMarkdownResult(upstreamPayload);
 
-  return jsonResponse(
+  const response = jsonResponse(
     request,
     {
       url: targetUrl,
@@ -1310,29 +1005,21 @@ async function handleMarkdown(request, params, requestId) {
       ...(browserMsUsed ? { "X-Browser-Ms-Used": browserMsUsed } : {}),
     }
   );
+
+  return attachSessionCookie(response, authResult);
 }
 
 async function handleHtml(request, params, requestId) {
   const targetUrl = normalizeTargetUrl(params.url);
-  const requestToken = getRequestToken(request, params.token);
   const startedAt = Date.now();
   const maxBytes = normalizeContentMaxBytes(params);
 
-  ensureAuthConfigured();
-  await enforceRateLimit(request, getRateLimitToken(requestToken));
-
-  if (!verifyToken(requestToken)) {
-    throw new ApiError({
-      status: 401,
-      code: "UNAUTHORIZED",
-      category: "auth",
-      message: "Invalid or missing authentication token",
-    });
-  }
+  // Fix #8: Use unified requireAuth helper (eliminates boilerplate)
+  const authResult = await requireAuth(request, params);
 
   const payload = await fetchReadableContent(targetUrl, maxBytes);
 
-  return jsonResponse(
+  const response = jsonResponse(
     request,
     {
       ...payload,
@@ -1344,6 +1031,8 @@ async function handleHtml(request, params, requestId) {
       "X-Search-Duration-Ms": String(Date.now() - startedAt),
     }
   );
+
+  return attachSessionCookie(response, authResult);
 }
 
 function createErrorResponse(request, requestId, error) {
@@ -1388,13 +1077,35 @@ async function handleRequest(request) {
   }
 
   if (url.pathname === "/") {
-    return new Response(getSearchHtml(), {
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        ...buildCorsHeaders(request),
-        "X-Search-Request-Id": requestId,
-      },
-    });
+    // Session management: create or validate session cookie
+    let sessionResult = await validateSession(request);
+    let setCookieHeader = sessionResult.setCookie;
+
+    if (!sessionResult.valid) {
+      const newSession = await createSession(request);
+      setCookieHeader = newSession.setCookie;
+    }
+
+    const headers = {
+      "Content-Type": "text/html; charset=utf-8",
+      ...buildCorsHeaders(request),
+      "X-Search-Request-Id": requestId,
+    };
+    if (setCookieHeader) {
+      headers["Set-Cookie"] = setCookieHeader;
+    }
+
+    return new Response(await getSearchHtml(), { headers });
+  }
+
+  if (url.pathname === "/docs") {
+    const headers = {
+      "Content-Type": "text/html; charset=utf-8",
+      ...buildCorsHeaders(request),
+      "X-Search-Request-Id": requestId,
+    };
+
+    return new Response(await getDocsHtml(), { headers });
   }
 
   if (url.pathname === "/auth/verify") {
@@ -1443,17 +1154,6 @@ async function handleRequest(request) {
     } catch (error) {
       const normalized = normalizeError(error);
       console.error("[handleHtml] Error:", normalized.code, normalized.message);
-      return createErrorResponse(request, requestId, normalized);
-    }
-  }
-
-  if (url.pathname === "/research") {
-    try {
-      const params = await parseRequestParams(request, url);
-      return await handleResearch(request, params, requestId);
-    } catch (error) {
-      const normalized = normalizeError(error);
-      console.error("[handleResearch] Error:", normalized.code, normalized.message);
       return createErrorResponse(request, requestId, normalized);
     }
   }

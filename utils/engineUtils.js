@@ -1,7 +1,39 @@
 import { ApiError } from "./errors.js";
 
-export const SEARCH_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
+// UA pool with matching Sec-Ch-Ua and platform hints
+const BROWSER_PROFILES = [
+  {
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    secChUa: '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"',
+    secChUaPlatform: '"Windows"',
+    secChUaMobile: "?0",
+  },
+  {
+    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    secChUa: '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"',
+    secChUaPlatform: '"macOS"',
+    secChUaMobile: "?0",
+  },
+  {
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    // Firefox doesn't send Sec-Ch-Ua headers
+    secChUa: null,
+    secChUaPlatform: null,
+    secChUaMobile: null,
+  },
+];
+
+let profileIndex = 0;
+
+export function getRandomUserAgent() {
+  profileIndex = (profileIndex + 1) % BROWSER_PROFILES.length;
+  return BROWSER_PROFILES[profileIndex].ua;
+}
+
+export function getRandomBrowserProfile() {
+  profileIndex = (profileIndex + 1) % BROWSER_PROFILES.length;
+  return BROWSER_PROFILES[profileIndex];
+}
 
 export function getAcceptLanguageHeader(language) {
   const normalized = String(language || "").trim().toLowerCase();
@@ -26,13 +58,28 @@ export function getAcceptLanguageHeader(language) {
 }
 
 export function getDefaultFetchHeaders(language, extraHeaders = {}) {
-  return {
+  const profile = getRandomBrowserProfile();
+  const headers = {
     accept:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "accept-language": getAcceptLanguageHeader(language),
-    "user-agent": SEARCH_USER_AGENT,
+    "user-agent": profile.ua,
+    // Sec-Fetch headers — real browsers always send these for navigation requests
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "none",
+    "sec-fetch-user": "?1",
     ...extraHeaders,
   };
+
+  // Chrome sends Client Hints; Firefox does not
+  if (profile.secChUa) {
+    headers["sec-ch-ua"] = profile.secChUa;
+    headers["sec-ch-ua-platform"] = profile.secChUaPlatform;
+    headers["sec-ch-ua-mobile"] = profile.secChUaMobile;
+  }
+
+  return headers;
 }
 
 export async function fetchText(

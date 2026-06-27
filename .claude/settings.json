@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "search-mcp": {
+      "command": "node",
+      "args": ["$(npm root -g)/@endday/search-mcp/mcp/search-mcp.js"],
+      "env": {
+        "SEARCH_MCP_URL": "https://search-mcp.845426454.workers.dev"
+      }
+    }
+  }
+}

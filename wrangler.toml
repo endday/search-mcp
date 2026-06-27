@@ -2,7 +2,7 @@
 # 更多配置选项: https://developers.cloudflare.com/workers/wrangler/configuration/
 
 # Worker 名称(修改为你想要的名称)
-name = "cloudflare-search"
+name = "search-mcp"
 
 # Worker 主文件
 main = "worker.js"
@@ -41,9 +41,8 @@ AUTH_REQUIRED = "true"
 # TOKEN = ""
 
 # 搜索网关配置(可选)
-# DEFAULT_ENGINES = "startpage,duckduckgo,brave,mojeek,bing"
+# DEFAULT_ENGINES = "startpage,bing,duckduckgo,brave,mojeek"
 # DEFAULT_TIMEOUT = "4000"
-# HEDGED_FALLBACK_DELAY_MS = "400"
 # FALLBACK_MIN_RESULTS = "6"
 # FALLBACK_MIN_CONTRIBUTING_ENGINES = "2"
 # CACHE_TTL_SECONDS = "300"
@@ -81,7 +80,7 @@ id = "4a8433ace1cf46d7aebfc14dd6c98ac2"
 # ============================================
 # 生产环境配置
 # [env.production]
-# name = "cloudflare-search-prod"
+# name = "search-mcp-prod"
 # workers_dev = false
 # routes = [
 #   { pattern = "search.yourdomain.com/*", zone_name = "yourdomain.com" }
@@ -89,7 +88,7 @@ id = "4a8433ace1cf46d7aebfc14dd6c98ac2"
 
 # 开发环境配置
 # [env.staging]
-# name = "cloudflare-search-staging"
+# name = "search-mcp-staging"
 # workers_dev = true
 
 # ============================================

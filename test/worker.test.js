@@ -6,6 +6,7 @@ import worker from "../worker.js";
 import { resetHealthState } from "../utils/health.js";
 import { resetRateLimitState } from "../utils/rateLimit.js";
 import { resetStartpageRequestState } from "../utils/searchStartpage.js";
+import { resetSessionState } from "../utils/session.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -195,20 +196,20 @@ function installHtmlFetchStub(html, options = {}) {
   return calls;
 }
 
-function createResearchHtml(index) {
+function createMockPageHtml(index) {
   return `<!doctype html>
     <html lang="en">
       <head>
-        <title>Research source ${index}</title>
-        <meta name="description" content="Research source ${index} description">
+        <title>Mock page ${index}</title>
+        <meta name="description" content="Mock page ${index} description">
       </head>
       <body>
         <header>Navigation and unrelated links</header>
         <main>
           <article class="post-content">
-            <h1>Research source ${index}</h1>
-            <p>Research source ${index} contains a readable article paragraph with enough detail for extraction and downstream citation.</p>
-            <p>This second paragraph adds more context about Cloudflare Workers, search aggregation, source reading, and structured excerpts.</p>
+            <h1>Mock page ${index}</h1>
+            <p>Mock page ${index} contains a readable article paragraph with enough detail for extraction and downstream citation.</p>
+            <p>This second paragraph adds more context about Cloudflare Workers, search aggregation, and structured excerpts.</p>
             <p>The final paragraph keeps the extracted text long enough to test clipping behavior without depending on external websites.</p>
           </article>
         </main>
@@ -219,7 +220,7 @@ function createResearchHtml(index) {
 function createBingResultsHtml(count) {
   const items = Array.from({ length: count }, (_, index) => ({
     url: `https://example.com/source-${index + 1}`,
-    title: `Research result ${index + 1}`,
+    title: `Search result ${index + 1}`,
     description: `Search result ${index + 1} description with enough text to be treated as an organic result.`,
   }));
 
@@ -231,7 +232,7 @@ function createBingResultsFromItems(results) {
     const resultIndex = index + 1;
 
     return `<li class="b_algo">
-      <h2><a href="${result.url}">${result.title || `Research result ${resultIndex}`}</a></h2>
+      <h2><a href="${result.url}">${result.title || `Search result ${resultIndex}`}</a></h2>
       <div class="b_caption">
         <p>${result.description || `Search result ${resultIndex} description with enough text to be treated as an organic result.`}</p>
       </div>
@@ -297,7 +298,7 @@ function installSearchAndContentFetchStub({
       return contentHandler(url, init, contentCalls.length);
     }
 
-    return new Response(createResearchHtml(contentCalls.length), {
+    return new Response(createMockPageHtml(contentCalls.length), {
       status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -326,19 +327,21 @@ beforeEach(() => {
   resetHealthState();
   resetRateLimitState();
   resetStartpageRequestState();
+  resetSessionState();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   resetHealthState();
   resetRateLimitState();
+  resetSessionState();
 });
 
 test("handles GET /search requests", async () => {
   installFetchStub();
 
   const response = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     createEnv()
   );
   const payload = await response.json();
@@ -357,7 +360,7 @@ test("does not use request.cf city unless location is auto", async () => {
 
   const defaultResponse = await worker.fetch(
     createSearchRequest(
-      "/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94%E5%A6%82%E4%BD%95",
+      "/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94%E5%A6%82%E4%BD%95&engines=bing",
       {},
       {
         city: "上海",
@@ -384,7 +387,7 @@ test("does not use request.cf city unless location is auto", async () => {
 
   const autoResponse = await worker.fetch(
     createSearchRequest(
-      "/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94%E5%A6%82%E4%BD%95&location=auto",
+      "/search?q=%E6%98%8E%E5%A4%A9%E5%A4%A9%E6%B0%94%E5%A6%82%E4%BD%95&location=auto&engines=bing",
       {},
       {
         city: "上海",
@@ -432,7 +435,7 @@ test("filters search results by source authority parameters", async () => {
 
   const response = await worker.fetch(
     createSearchRequest(
-      "/search?q=deepseek%20model&min_authority_score=1&exclude_source_types=community"
+      "/search?q=deepseek%20model&min_authority_score=1&exclude_source_types=community&engines=bing"
     ),
     createEnv()
   );
@@ -705,308 +708,11 @@ test("keeps html endpoint as a content alias", async () => {
   assert.match(payload.text, /Alias content/);
 });
 
-test("research searches and reads top sources", async () => {
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsHtml(6),
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.query, "cloudflare");
-  assert.equal(payload.limit, 3);
-  assert.equal(payload.sources.length, 3);
-  assert.equal(payload.read_count, 3);
-  assert.equal(payload.failed_count, 0);
-  assert.equal(payload.skipped_count, 0);
-  assert.equal(payload.attempted_count, 3);
-  assert.equal(calls.searchCalls.length, 1);
-  assert.equal(calls.contentCalls.length, 3);
-  assert.equal(response.headers.get("X-Research-Read-Count"), "3");
-  assert.equal(response.headers.get("X-Research-Failed-Count"), "0");
-  assert.ok(payload.sources.every((source) => source.status === "ok"));
-  assert.match(payload.sources[0].excerpt, /Research source 1/);
-  assert.ok(payload.sources[0].metadata);
-  assert.equal(payload.sources[0].source_type, "unknown");
-  assert.equal(payload.sources[0].authority_score, 0);
-});
-
-test("research reads source pages concurrently", async () => {
-  let activeReads = 0;
-  let maxActiveReads = 0;
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsHtml(6),
-    },
-    contentHandler: async (url) => {
-      activeReads += 1;
-      maxActiveReads = Math.max(maxActiveReads, activeReads);
-      await sleep(10);
-      activeReads -= 1;
-
-      const sourceIndex = Number.parseInt(
-        String(url).match(/source-(\d+)/)?.[1] || "1",
-        10
-      );
-
-      return new Response(createResearchHtml(sourceIndex), {
-        status: 200,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      });
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare&limit=3"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.read_count, 3);
-  assert.equal(calls.contentCalls.length, 3);
-  assert.ok(maxActiveReads > 1);
-});
-
-test("research applies source filters before reading pages", async () => {
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsFromItems([
-        {
-          url: "https://www.deepseek.com/zh",
-          title: "DeepSeek official",
-          description: "Official model website.",
-        },
-        {
-          url: "https://www.stcn.com/article/detail/3869261.html",
-          title: "DeepSeek-V4 media report",
-          description: "Media report about DeepSeek V4 performance.",
-        },
-      ]),
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest(
-      "/research?q=deepseek%20model&include_source_types=media&limit=1"
-    ),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.number_of_results, 1);
-  assert.equal(payload.results[0].source_type, "media");
-  assert.equal(payload.sources.length, 1);
-  assert.equal(payload.sources[0].source_type, "media");
-  assert.match(calls.contentCalls[0].url, /stcn\.com/);
-  assert.deepEqual(payload.source_filters.include_source_types, ["media"]);
-});
-
-test("research clamps limit and excerpt size", async () => {
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsHtml(6),
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare&limit=10&excerpt_chars=220"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.limit, 5);
-  assert.equal(payload.excerpt_chars, 220);
-  assert.equal(payload.sources.length, 5);
-  assert.equal(payload.attempted_count, 5);
-  assert.equal(calls.contentCalls.length, 5);
-  assert.ok(payload.sources[0].excerpt.length <= 220);
-});
-
-test("research keeps reading after source-level failures", async () => {
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsHtml(6),
-    },
-    contentHandler: (_url, _init, callCount) => {
-      if (callCount === 2) {
-        return new Response("upstream failed", {
-          status: 500,
-          headers: {
-            "content-type": "text/html; charset=utf-8",
-          },
-        });
-      }
-
-      return new Response(createResearchHtml(callCount), {
-        status: 200,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      });
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare&limit=3"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.sources.length, 4);
-  assert.equal(payload.attempted_count, 4);
-  assert.equal(payload.read_count, 3);
-  assert.equal(payload.failed_count, 1);
-  assert.equal(payload.skipped_count, 0);
-  assert.equal(payload.sources[1].status, "error");
-  assert.equal(payload.sources[1].error.code, "UPSTREAM_HTTP_ERROR");
-  assert.equal(payload.sources[3].status, "ok");
-  assert.equal(calls.contentCalls.length, 4);
-});
-
-test("research skips thin extracted pages and keeps reading", async () => {
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: createBingResultsHtml(6),
-    },
-    contentHandler: (url) => {
-      if (String(url).includes("source-1")) {
-        return new Response(
-          "<html><head><title>Thin page</title></head><body><main><p>© 2026 Example. All rights reserved.</p></main></body></html>",
-          {
-            status: 200,
-            headers: {
-              "content-type": "text/html; charset=utf-8",
-            },
-          }
-        );
-      }
-
-      const sourceIndex = Number.parseInt(
-        String(url).match(/source-(\d+)/)?.[1] || "2",
-        10
-      );
-
-      return new Response(createResearchHtml(sourceIndex), {
-        status: 200,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      });
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare&limit=3"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.sources.length, 4);
-  assert.equal(payload.attempted_count, 4);
-  assert.equal(payload.read_count, 3);
-  assert.equal(payload.failed_count, 0);
-  assert.equal(payload.skipped_count, 1);
-  assert.equal(payload.sources[0].status, "skipped");
-  assert.equal(payload.sources[0].reason.code, "LOW_CONTENT");
-  assert.equal(payload.sources[1].status, "ok");
-  assert.equal(calls.contentCalls.length, 4);
-});
-
-test("research rejects private network result URLs as source errors", async () => {
-  const privateResultHtml = `<!doctype html>
-    <html>
-      <body>
-        <main>
-          <ol id="b_results">
-            <li class="b_algo">
-              <h2><a href="http://192.168.1.10/admin">Private admin</a></h2>
-              <p>Private network result should be blocked by the research reader.</p>
-            </li>
-          </ol>
-        </main>
-      </body>
-    </html>`;
-  const calls = installSearchAndContentFetchStub({
-    engineResponses: {
-      bing: privateResultHtml,
-    },
-  });
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=private&limit=1"),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.sources.length, 1);
-  assert.equal(payload.read_count, 0);
-  assert.equal(payload.failed_count, 1);
-  assert.equal(payload.sources[0].status, "error");
-  assert.equal(payload.sources[0].error.code, "INVALID_URL");
-  assert.equal(calls.contentCalls.length, 0);
-});
-
-test("handles JSON POST /research requests", async () => {
-  const calls = installSearchAndContentFetchStub();
-
-  const response = await worker.fetch(
-    createSearchRequest("/research", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        q: "cloudflare",
-        limit: 1,
-        excerpt_chars: 300,
-      }),
-    }),
-    createEnv()
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.sources.length, 1);
-  assert.equal(payload.excerpt_chars, 300);
-  assert.equal(calls.contentCalls.length, 1);
-});
-
-test("rejects research requests without configured token", async () => {
-  const calls = installSearchAndContentFetchStub();
-
-  const response = await worker.fetch(
-    createSearchRequest("/research?q=cloudflare"),
-    createEnv({
-      TOKEN: "secret",
-    })
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 401);
-  assert.equal(payload.code, "UNAUTHORIZED");
-  assert.equal(calls.searchCalls.length, 0);
-  assert.equal(calls.contentCalls.length, 0);
-});
-
 test("allows explicit location and location opt-out", async () => {
   installFetchStub();
 
   const explicitResponse = await worker.fetch(
-    createSearchRequest("/search?q=weather&location=Hong%20Kong"),
+    createSearchRequest("/search?q=weather&location=Hong%20Kong&engines=bing"),
     createEnv()
   );
   const explicitPayload = await explicitResponse.json();
@@ -1017,7 +723,7 @@ test("allows explicit location and location opt-out", async () => {
 
   const disabledResponse = await worker.fetch(
     createSearchRequest(
-      "/search?q=weather&location=off",
+      "/search?q=weather&location=off&engines=bing",
       {},
       {
         city: "上海",
@@ -1080,21 +786,32 @@ test("renders token input on homepage when auth is enabled", async () => {
   assert.equal(response.status, 200);
   assert.match(html, /id="tokenInput"/);
   assert.match(html, /\/auth\/verify/);
-  assert.match(html, /id="geoSummary"/);
-  assert.match(html, /\/geo/);
-  assert.match(html, /data-tab-target="api"/);
-  assert.match(html, /data-tab-panel="mcp"/);
-  assert.match(html, /接口测试台/);
-  assert.match(html, /id="searchApiForm"/);
-  assert.match(html, /id="researchApiForm"/);
-  assert.match(html, /id="contentApiForm"/);
-  assert.match(html, /data-api-test-target="search"/);
-  assert.match(html, /data-api-test-target="research"/);
-  assert.match(html, /data-api-test-target="content"/);
-  assert.match(html, /path: '\/research'/);
-  assert.match(html, /path: '\/content'/);
-  assert.doesNotMatch(html, /resultsContainer\.innerHTML\s*=\s*data\.results/);
+  // Homepage is now search-only; docs content moved to /docs
+  assert.doesNotMatch(html, /data-tab-target="api"/);
+  assert.doesNotMatch(html, /data-tab-panel="mcp"/);
+  assert.doesNotMatch(html, /id="searchApiForm"/);
+  assert.doesNotMatch(html, /id="contentApiForm"/);
+  assert.doesNotMatch(html, /data-api-test-target/);
+  assert.match(html, /href="\/docs"/);
   assert.match(html, /document\.createElement/);
+});
+
+test("renders docs page with API, MCP, engines, and deploy sections", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/docs"),
+    createEnv({
+      TOKEN: "secret",
+    })
+  );
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  // Docs page uses vertical sections, not tabs
+  assert.doesNotMatch(html, /API 使用/);
+  assert.match(html, /mcp-config-json/);
+  assert.match(html, /支持的搜索引擎/);
+  assert.match(html, /快速部署/);
+  assert.match(html, /href="\/"/);
 });
 
 test("renders token input on homepage when auth is required by config", async () => {
@@ -1108,7 +825,83 @@ test("renders token input on homepage when auth is required by config", async ()
 
   assert.equal(response.status, 200);
   assert.match(html, /id="tokenInput"/);
-  assert.match(html, /AUTH_REQUIRED is enabled|需要配置 TOKEN/);
+  assert.doesNotMatch(html, /API 鉴权未完全配置/);
+});
+
+test("homepage sets session cookie on first visit", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/"),
+    createEnv()
+  );
+
+  assert.equal(response.status, 200);
+  const setCookie = response.headers.get("set-cookie");
+  assert.ok(setCookie, "Set-Cookie header should be present");
+  assert.match(setCookie, /search_mcp_sid=[a-f0-9-]+/);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /SameSite=Lax/);
+  assert.match(setCookie, /Path=\//);
+});
+
+test("homepage reuses existing session cookie", async () => {
+  const firstResponse = await worker.fetch(
+    createSearchRequest("/"),
+    createEnv()
+  );
+  const firstCookie = firstResponse.headers.get("set-cookie");
+  const sessionId = firstCookie.match(/search_mcp_sid=([^;]+)/)[1];
+
+  const secondResponse = await worker.fetch(
+    createSearchRequest("/", {
+      headers: { cookie: `search_mcp_sid=${sessionId}` },
+    }),
+    createEnv()
+  );
+
+  assert.equal(secondResponse.status, 200);
+  const secondCookie = secondResponse.headers.get("set-cookie");
+  // Should still set cookie (to extend Max-Age), with the same session ID
+  assert.ok(secondCookie);
+  assert.match(secondCookie, new RegExp(`search_mcp_sid=${sessionId}`));
+});
+
+test("/search works with valid session cookie (unified auth)", async () => {
+  installSearchAndContentFetchStub({
+    engineResponses: {
+      bing: createBingResultsHtml(3),
+    },
+  });
+
+  // First, get a session from the homepage
+  const homeResponse = await worker.fetch(
+    createSearchRequest("/"),
+    createEnv({ AUTH_REQUIRED: "true", TOKEN: "secret" })
+  );
+  const homeCookie = homeResponse.headers.get("set-cookie");
+  const sessionId = homeCookie.match(/search_mcp_sid=([^;]+)/)[1];
+
+  // Then use it for /search (no token, just session cookie)
+  const searchResponse = await worker.fetch(
+    createSearchRequest("/search?q=cloudflare&engines=bing", {
+      headers: { cookie: `search_mcp_sid=${sessionId}` },
+    }),
+    createEnv({ AUTH_REQUIRED: "true", TOKEN: "secret" })
+  );
+
+  assert.equal(searchResponse.status, 200);
+  const payload = await searchResponse.json();
+  assert.ok(payload.number_of_results >= 0);
+});
+
+test("/search rejects without auth when AUTH_REQUIRED", async () => {
+  const response = await worker.fetch(
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
+    createEnv({ AUTH_REQUIRED: "true", TOKEN: "secret" })
+  );
+
+  assert.equal(response.status, 401);
+  const payload = await response.json();
+  assert.equal(payload.code, "UNAUTHORIZED");
 });
 
 test("handles JSON POST /search requests", async () => {
@@ -1161,7 +954,6 @@ test("handles newly added Qwant and Yahoo engines", async () => {
     createSearchRequest("/search?q=cloudflare&engines=qwant,yahoo"),
     createEnv({
       FALLBACK_MIN_RESULTS: "1",
-      HEDGED_FALLBACK_DELAY_MS: "1000",
     })
   );
   const payload = await response.json();
@@ -1176,7 +968,7 @@ test("rejects requests without configured token", async () => {
   installFetchStub();
 
   const response = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     createEnv({
       TOKEN: "secret",
     })
@@ -1189,7 +981,7 @@ test("rejects requests without configured token", async () => {
 
 test("fails closed when auth is required but token secret is missing", async () => {
   const response = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     createEnv({
       AUTH_REQUIRED: "true",
     })
@@ -1229,7 +1021,7 @@ test("returns normal auth error when token is missing on verify endpoint", async
 
   assert.equal(response.status, 401);
   assert.equal(payload.code, "UNAUTHORIZED");
-  assert.equal(payload.message, "Invalid or missing authentication token");
+  assert.match(payload.message, /Authentication required/);
 });
 
 test("rate limits unauthorized requests by IP", async () => {
@@ -1242,7 +1034,7 @@ test("rate limits unauthorized requests by IP", async () => {
     SEARCH_STATE_KV: new MemoryKv(),
   });
   const firstResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare", {
+    createSearchRequest("/search?q=cloudflare&engines=bing", {
       headers: {
         Authorization: "Bearer wrong-token-1",
         "cf-connecting-ip": "203.0.113.15",
@@ -1251,7 +1043,7 @@ test("rate limits unauthorized requests by IP", async () => {
     env
   );
   const secondResponse = await worker.fetch(
-    createSearchRequest("/search?q=workers", {
+    createSearchRequest("/search?q=workers&engines=bing", {
       headers: {
         Authorization: "Bearer wrong-token-2",
         "cf-connecting-ip": "203.0.113.15",
@@ -1277,11 +1069,11 @@ test("uses KV-backed response cache", async () => {
   });
 
   const firstResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     env
   );
   const secondResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     env
   );
 
@@ -1300,7 +1092,7 @@ test("enforces KV-backed rate limit", async () => {
     SEARCH_STATE_KV: new MemoryKv(),
   });
   const firstResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare", {
+    createSearchRequest("/search?q=cloudflare&engines=bing", {
       headers: {
         "cf-connecting-ip": "203.0.113.10",
       },
@@ -1308,7 +1100,7 @@ test("enforces KV-backed rate limit", async () => {
     env
   );
   const secondResponse = await worker.fetch(
-    createSearchRequest("/search?q=workers", {
+    createSearchRequest("/search?q=workers&engines=bing", {
       headers: {
         "cf-connecting-ip": "203.0.113.10",
       },
@@ -1340,14 +1132,13 @@ test("falls back after an engine parser failure", async () => {
   assert.equal(payload.results[0].engine, "startpage");
 });
 
-test("continues fallback until multiple engines contribute by default", async () => {
+test("runs engines in parallel until enough contribute", async () => {
   const calls = installFetchStub();
 
   const response = await worker.fetch(
     createSearchRequest("/search?q=cloudflare&engines=bing,startpage"),
     createEnv({
       FALLBACK_MIN_RESULTS: "1",
-      HEDGED_FALLBACK_DELAY_MS: "1000",
     })
   );
 
@@ -1363,7 +1154,7 @@ test("skips engines that do not support requested time filters", async () => {
   const calls = installFetchStub();
 
   const response = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare&time_range=month"),
+    createSearchRequest("/search?q=cloudflare&time_range=month&engines=startpage,bing"),
     createEnv({
       DEFAULT_ENGINES: "startpage,bing",
     })
@@ -1413,7 +1204,7 @@ test("skips engines that do not support requested pages", async () => {
   const calls = installFetchStub();
 
   const response = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare&pageno=1"),
+    createSearchRequest("/search?q=cloudflare&pageno=1&engines=bing,duckduckgo,mojeek"),
     createEnv({
       DEFAULT_ENGINES: "bing,duckduckgo,mojeek",
     })
@@ -1455,28 +1246,33 @@ test("reports unsupported requested engines", async () => {
   ]);
 });
 
-test("moves unhealthy engines behind healthy fallbacks with KV state", async () => {
+test("runs all engines in parallel even when some are cooled down", async () => {
   const calls = installFetchStub({
     bing: "<html><body>No organic results</body></html>",
   });
   const env = createEnv({
-    DEFAULT_ENGINES: "bing,startpage",
     HEALTH_FAILURE_THRESHOLD: "1",
     HEALTH_COOLDOWN_SECONDS: "120",
     SEARCH_STATE_KV: new MemoryKv(),
   });
 
-  await worker.fetch(createSearchRequest("/search?q=cloudflare"), env);
+  await worker.fetch(
+    createSearchRequest("/search?q=cloudflare&engines=bing,startpage"),
+    env
+  );
   calls.length = 0;
 
   const response = await worker.fetch(
-    createSearchRequest("/search?q=workers"),
+    createSearchRequest("/search?q=workers&engines=bing,startpage"),
     env
   );
   const payload = await response.json();
 
   assert.equal(response.status, 200);
-  assert.deepEqual(calls, ["startpage"]);
+  // Parallel mode: both engines start regardless of health/cooldown state.
+  // Bing may issue multiple internal requests (HTML + RSS fallback).
+  assert.ok(calls.includes("bing"));
+  assert.ok(calls.includes("startpage"));
   assert.equal(payload.results[0].engine, "startpage");
 });
 
@@ -1492,7 +1288,7 @@ test("returns stale cache when fresh search fails", async () => {
   });
 
   const initialResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     env
   );
   assert.equal(initialResponse.status, 200);
@@ -1509,7 +1305,7 @@ test("returns stale cache when fresh search fails", async () => {
   });
 
   const staleResponse = await worker.fetch(
-    createSearchRequest("/search?q=cloudflare"),
+    createSearchRequest("/search?q=cloudflare&engines=bing"),
     env
   );
   const payload = await staleResponse.json();
@@ -1519,7 +1315,7 @@ test("returns stale cache when fresh search fails", async () => {
   assert.equal(payload.results[0].engine, "bing");
 });
 
-test("starts fallback early when primary is slow", async () => {
+test("waits for slow engines in parallel mode", async () => {
   const calls = installFetchStub({
     bing: async () => {
       await sleep(50);
@@ -1541,9 +1337,7 @@ test("starts fallback early when primary is slow", async () => {
 
   const response = await worker.fetch(
     createSearchRequest("/search?q=cloudflare&engines=bing,startpage"),
-    createEnv({
-      HEDGED_FALLBACK_DELAY_MS: "10",
-    })
+    createEnv()
   );
   const payload = await response.json();
 

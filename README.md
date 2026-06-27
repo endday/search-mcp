@@ -1,4 +1,4 @@
-# Cloudflare Search
+# Search MCP
 
 English | [中文](./README.zh.md)
 
@@ -6,20 +6,17 @@ English | [中文](./README.zh.md)
 
 > Supports **MCP (Model Context Protocol)**, giving AI assistants (OpenClaw, Claude Code, Codex, OpenCode) real-time web search capabilities
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://sink.proddig.com/cloudflare-search-github)
-
 ## Features
 
-- 🔍 **Prioritized Search Gateway** - Use Startpage first, then DuckDuckGo, Brave, Mojeek, and Bing as fallback engines
+- 🔍 **Multi-Engine Search Gateway** - Query multiple engines in parallel (Startpage, Bing, DuckDuckGo, Brave, Mojeek, Qwant, Yahoo)
 - 🤖 **AI Enhanced (MCP)** - Native support for Model Context Protocol, one-click search tool integration for **OpenClaw** / **Claude Code** / **Codex**
-- 🔎 **Research API** - `/research` searches first, then reads readable excerpts from top sources for AI retrieval
 - ⚡ **Smart Fallback** - Stop after enough deduplicated results instead of always querying every engine
 - 🛡️ **Fault Tolerance** - Timeout, parse, and upstream errors are classified; unhealthy engines are cooled down automatically
-- 🧹 **Deduplication & Ranking** - Canonicalize URLs, remove duplicate results, and rank by engine priority + query relevance
+- 🧹 **Deduplication & Ranking** - Canonicalize URLs, remove duplicate results, and rank by source authority + query relevance
 - 💾 **KV Cache** - Fresh-cache + stale-if-error support with configurable TTL
 - 🚦 **Simple Rate Limiting** - Per-token/IP fixed-window rate limit, with optional KV-backed shared state
 - ⏱️ **Timeout Control** - Configurable request timeout to avoid long waits
-- 🪂 **Hedged Fallback** - Trigger the next fallback early when the primary engine is slow
+- 🪂 **Parallel + Early Stop** - All requested engines run in parallel; once enough deduplicated results arrive, the rest are aborted
 - 🔒 **Token Authentication** - Supports token auth to protect the service from abuse
 - 🧾 **Direct Content Reader** - `/content` fetches server-rendered pages and extracts the likely main content without browser rendering
 - 📄 **Rendered Markdown API** - Optional `/markdown` endpoint backed by Cloudflare Browser Rendering for SPA pages
@@ -39,7 +36,7 @@ With MCP (Model Context Protocol), AI assistants can directly call your search s
 
 #### 1. Deploy the Service
 
-First, follow the guide to [Deploy Cloudflare Search](#installation-methods)
+First, follow the guide to [deploy Search MCP](#installation-methods)
 
 #### 2. Add MCP Server Configuration
 
@@ -53,12 +50,12 @@ Edit your config file ([configuration guide](https://modelcontextprotocol.io/qui
 ```json
 {
 	"mcpServers": {
-		"cloudflare-search": {
+		"search-mcp": {
 			"command": "npx",
-			"args": ["-y", "@yrobot/cf-search-mcp"],
+			"args": ["-y", "@endday/search-mcp"],
 			"env": {
-				"CF_SEARCH_URL": "https://your-worker.workers.dev",
-				"CF_SEARCH_TOKEN": "your-token-here"
+				"SEARCH_MCP_URL": "https://your-worker.workers.dev",
+				"SEARCH_MCP_TOKEN": "your-token-here"
 			}
 		}
 	}
@@ -69,30 +66,34 @@ Edit your config file ([configuration guide](https://modelcontextprotocol.io/qui
 
 - `X-Search-Request-Id`: request identifier for log correlation
 - `X-Search-Cache`: `miss` / `hit` / `revalidated` / `stale-if-error`
-- `X-Search-Fallback-Order`: engine priority order for this request
+- `X-Search-Fallback-Order`: engines queried for this request
 - `X-Search-Fallback-Path`: engines actually started for this request
 - `X-Search-Duration-Ms`: total gateway duration
 - `Server-Timing`: per-engine timing data
 
 **Environment Variables**:
 
-- `CF_SEARCH_URL`: Worker deployment URL (required)
-- `CF_SEARCH_TOKEN`: Auth token (required if your Worker has `TOKEN` configured)
+- `SEARCH_MCP_URL`: Worker deployment URL (required)
+- `SEARCH_MCP_TOKEN`: Auth token (required if your Worker has `TOKEN` configured)
+- `JINA_API_KEY`: Jina AI API key for higher rate limits (optional, free tier available without key)
+- `JINA_BASE_URL`: Jina reader base URL (optional, default: `https://r.jina.ai/`)
 
-The MCP package exposes `web_search`, `search`, `research`, and `content`: the first two return deduplicated search results, `research` also fetches readable excerpts from top sources, and `content` extracts one specific URL.
+The The MCP package exposes `web_search`, `content`, and `jina_content` tools: `web_search` returns deduplicated search results with snippets and source authority, `content` extracts readable text from a URL via the Worker's Readability extractor, and `jina_content` extracts text via Jina AI reader (per-user rate limit).
 
 #### 3. Verify Installation
 
-- **OpenClaw**: Run `openclaw gateway restart` + `openclaw mcp list` and check that `cloudflare-search` appears
+- **OpenClaw**: Run `openclaw gateway restart` + `openclaw mcp list` and check that `search-mcp` appears
 - **Claude Code**:
-	- Run `/mcp` in Claude Code, and you should see the `cloudflare-search` tool.
-	- Or run `claude mcp list`; seeing `cloudflare-search: npx -y @yrobot/cf-search-mcp@latest - ✓ Connected` means setup is successful
+	- Run `/mcp` in Claude Code, and you should see the `search-mcp` tool.
+	- Or run `claude mcp list`; seeing `search-mcp: npx -y @endday/search-mcp@latest - ✓ Connected` means setup is successful
 
 ## Installation Methods
 
-### Method 1: One-click Deployment (Recommended)
+### Method 1: One-click Deployment
 
-Click the "Deploy to Cloudflare Workers" button above and follow the prompts.
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/endday/search-mcp)
+
+Click the button above and follow the prompts.
 
 ### Method 2: Use Wrangler CLI
 
@@ -104,8 +105,8 @@ npm install -g wrangler
 wrangler login
 
 # 3. Clone the repository
-git clone https://github.com/Yrobot/cloudflare-search.git
-cd cloudflare-search
+git clone https://github.com/endday/search-mcp.git
+cd search-mcp
 
 # 4. Deploy
 wrangler deploy
@@ -122,7 +123,7 @@ npm run smoke
 2. Go to **Workers & Pages**
 3. Click **Create Application** > **Create Worker**
 4. Click **Upload** to upload your local code folder
-	 - Select the cloned `cloudflare-search` folder
+	 - Select the cloned `search-mcp` folder
 	 - Or manually copy `worker.js`, `envs.js`, `utils/`, and other files
 5. Click **Save and Deploy**
 
@@ -134,7 +135,7 @@ After deployment, you will get a Worker URL:
 https://your-worker-name.your-subdomain.workers.dev
 ```
 
-**Note**: The default domain may not be directly accessible in some regions. It is recommended to bind your own custom domain.
+> **Important**: The default `*.workers.dev` domain may not be directly accessible in some regions (e.g. China). For stable access, bind your own custom domain via **Cloudflare Dashboard → Workers → your Worker → Triggers → Custom Domains**. All API examples below use `https://$YOUR-DOMAIN` — replace it with your actual domain.
 
 ## Usage
 
@@ -184,7 +185,7 @@ Used to execute search queries and return aggregated results.
 | Parameter     | Type     | Required | Description                                                | Example          |
 | ------------- | -------- | -------- | ---------------------------------------------------------- | ---------------- |
 | `q` / `query` | `string` | yes      | Search keyword                                             | `cloudflare`     |
-| `engines`     | `string` | no       | Specify search engines, separated by commas               | `startpage,duckduckgo` |
+| `engines`     | `string`/`array` | yes      | Required. Engines to query in parallel, comma-separated or array | `startpage,bing` |
 | `language`    | `string` | no       | Language/region hint passed to supported engines          | `en`, `zh-CN`    |
 | `location`    | `string` | no       | Location hint. Defaults to `off`; use `auto` to append Cloudflare `request.cf.city` / `region` | `auto`, `Shanghai`, `off` |
 | `time_range`  | `string` | no       | Time filter: `day`, `week`, `month`, or `year`            | `month`          |
@@ -296,60 +297,6 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 }
 ```
 
-### `/research` Endpoint
-
-Builds on `/search` by fetching readable page content from the top ranked results and returning source excerpts suitable for AI retrieval. It uses direct Worker HTML fetches by default, does not consume Cloudflare Browser Rendering quota, and does not call any LLM.
-
-`/research` supports all `/search` query parameters plus:
-
-| Parameter | Type | Required | Description | Default |
-| --------- | ---- | -------- | ----------- | ------- |
-| `limit` | `number` | no | Number of top search results to fetch, clamped to 1-5 | `3` |
-| `excerpt_chars` | `number` | no | Characters returned per source excerpt, clamped to 200-4,000 | `1200` |
-| `max_bytes` | `number` | no | Maximum upstream response bytes read per source, clamped to 50,000-5,000,000 | `1500000` |
-
-Search ranking applies deterministic source authority boosts by domain. Official sites, model repositories, papers, and benchmark platforms rank higher; generic blogs and community pages can be slightly demoted. External low-credibility source lists are synced into `data/sourceAuthority.generated.json` with `npm run update:source-authority`; the current sync uses the Iffy.news Index and JanaLasser/misinformation_domains. Project-specific allow/block decisions live in `data/sourceAuthority.overrides.json` and are merged last. No AI model is used for this scoring.
-
-During source reading, very thin or navigation-heavy extracted pages are marked as `status: "skipped"` with reason code `LOW_CONTENT` and do not count toward `read_count`; the Worker continues reading later results until it reaches `limit` or exhausts available results.
-
-#### Request Example
-
-```bash
-curl "https://$YOUR-DOMAIN/research?q=cloudflare&limit=3&excerpt_chars=1200" \
-	-H "Authorization: Bearer $YOUR-TOKEN"
-```
-
-#### Response Example
-
-```json
-{
-	"query": "cloudflare",
-	"effective_query": "cloudflare",
-	"number_of_results": 15,
-	"attempted_count": 3,
-	"read_count": 3,
-	"failed_count": 0,
-	"skipped_count": 0,
-	"sources": [
-		{
-			"index": 1,
-			"status": "ok",
-			"title": "Cloudflare Workers",
-			"url": "https://workers.cloudflare.com/",
-			"engine": "startpage",
-			"source_type": "official",
-			"authority_score": 90,
-			"extractor": "readability",
-			"excerpt": "Readable page excerpt...",
-			"metadata": {}
-		}
-	],
-	"results": []
-}
-```
-
-If an individual search result cannot be fetched, the overall response remains `200`; that item in `sources[]` returns `status: "error"` with error details. The endpoint keeps trying later search results until it reads `limit` usable sources or runs out of results.
-
 ### `/markdown` Endpoint
 
 Uses Cloudflare Browser Rendering to load a page and return rendered Markdown. This is useful for SPA pages where plain Worker `fetch()` cannot see the final content.
@@ -433,28 +380,76 @@ curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
 }
 ```
 
+### `/auth/verify` Endpoint
+
+Verifies whether the current request is authenticated. The web UI calls this when you click the "Verify" button to check whether a token is valid.
+
+If `TOKEN` is configured, this endpoint requires the same access token as `/search` (token or session cookie).
+
+#### Request Example
+
+```bash
+curl "https://$YOUR-DOMAIN/auth/verify" \
+	-H "Authorization: Bearer $YOUR-TOKEN"
+```
+
+#### Response Example
+
+```json
+{
+	"authorized": true,
+	"token_required": true,
+	"auth_method": "token"
+}
+```
+
+`auth_method` is one of `token`, `session`, or `none`. When `token_required` is `false`, auth is not enabled and any token is accepted.
+
+### `/geo` Endpoint
+
+Returns the Cloudflare `request.cf` geolocation payload for the current caller. Useful for previewing what `location=auto` would append to the upstream query.
+
+#### Request Example
+
+```bash
+curl "https://$YOUR-DOMAIN/geo"
+```
+
+#### Response Example
+
+```json
+{
+	"geo": {
+		"city": "Shanghai",
+		"region": "Shanghai",
+		"country": "CN"
+	}
+}
+```
+
+The returned fields depend on what Cloudflare exposes for the request; they may be empty when no geo data is available.
+
 ## Search Engine Notes
 
 ### Supported Search Engines
 
 | Engine         | Description                  | Configuration Required          | Default Role |
 | -------------- | ---------------------------- | ------------------------------- | ------------ |
-| **Startpage**  | Serialized SERP payload       | -                               | Default first |
-| **DuckDuckGo** | HTML search endpoint          | -                               | Fallback 1    |
-| **Brave**      | HTML result parser, no `eval` | -                               | Fallback 2    |
-| **Mojeek**     | Simple HTML parser            | -                               | Fallback 3    |
-| **Bing**       | HTML / RSS search parser      | -                               | Fallback 4    |
-| **Qwant**      | Qwant Lite HTML parser        | -                               | Optional      |
-| **Yahoo**      | HTML search parser            | -                               | Optional      |
+| **Startpage**  | Serialized SERP payload       | -                               | Default |
+| **Bing**       | HTML / RSS search parser      | -                               | Default |
+| **DuckDuckGo** | HTML search endpoint          | -                               | Default |
+| **Brave**      | HTML result parser, no `eval` | -                               | Default |
+| **Mojeek**     | Simple HTML parser            | -                               | Default |
+| **Qwant**      | Qwant Lite HTML parser        | -                               | Optional |
+| **Yahoo**      | HTML search parser            | -                               | Optional |
 
 ### Basic Working Approach
 
-1. **Prioritized Fallback**: Try engines in order (`startpage,duckduckgo,brave,mojeek,bing` by default)
+1. **Parallel Search**: `engines` is required — all requested engines start in parallel (no priority chain)
 2. **Early Stop**: Stop when deduplicated results reach `FALLBACK_MIN_RESULTS` and at least `FALLBACK_MIN_CONTRIBUTING_ENGINES` engines have contributed
 3. **Normalization**: Normalize titles/descriptions, canonicalize URLs, and remove duplicates
-4. **Health Control**: Repeated failures temporarily move an engine behind healthier fallbacks; bind `SEARCH_STATE_KV` to share state across isolates
+4. **Health Control**: Repeated failures are tracked per engine; bind `SEARCH_STATE_KV` to share state across isolates
 5. **Cache**: If `SEARCH_KV` is bound, final `/search` responses are cached by query + parameters, with stale-if-error fallback
-6. **Hedged Fallback**: When the primary path exceeds `HEDGED_FALLBACK_DELAY_MS`, the next fallback starts early
 
 ## Environment Variable Configuration
 
@@ -462,9 +457,9 @@ curl "https://$YOUR-DOMAIN/content?url=https%3A%2F%2Fexample.com%2Farticle" \
 
 | Variable Name | Type | Default | Description |
 | ------------- | ---- | ------- | ----------- |
-| `DEFAULT_ENGINES` | `string`/`array` | `startpage,duckduckgo,brave,mojeek,bing` | Priority/fallback order |
+| `DEFAULT_ENGINES` | `string`/`array` | `startpage,bing,duckduckgo,brave,mojeek` | Engines checked by default on the demo page (the API requires `engines`) |
 | `DEFAULT_TIMEOUT` | `string` | `"4000"` | Timeout per engine request, in milliseconds |
-| `HEDGED_FALLBACK_DELAY_MS` | `string` | `"400"` | Start the next fallback early when the current engine is slow |
+| `HEDGED_FALLBACK_DELAY_MS` | `string` | `"400"` | Deprecated — no longer used in parallel mode |
 | `FALLBACK_MIN_RESULTS` | `string` | `"6"` | Stop fallback after this many deduplicated results |
 | `FALLBACK_MIN_CONTRIBUTING_ENGINES` | `string` | `"2"` | Minimum result-contributing engines before early stop |
 | `CACHE_TTL_SECONDS` | `string` | `"300"` | KV cache TTL; set `0` to disable cache |
@@ -497,9 +492,8 @@ Edit the `[vars]` section in `wrangler.toml`:
 
 ```toml
 [vars]
-DEFAULT_ENGINES = "startpage,duckduckgo,brave,mojeek,bing"
+DEFAULT_ENGINES = "startpage,bing,duckduckgo,brave,mojeek"
 DEFAULT_TIMEOUT = "4000"
-HEDGED_FALLBACK_DELAY_MS = "400"
 FALLBACK_MIN_CONTRIBUTING_ENGINES = "2"
 CACHE_TTL_SECONDS = "300"
 STALE_CACHE_TTL_SECONDS = "1800"
@@ -578,10 +572,6 @@ const byEngine = data.results.reduce((acc, result) => {
 }, {});
 ```
 
-## MCP Integration
-
-With MCP (Model Context Protocol), AI assistants can directly call your search service and get real-time search results.
-
 ## Notes and Reminders
 
 ### 🚨 Important Notes
@@ -593,8 +583,8 @@ With MCP (Model Context Protocol), AI assistants can directly call your search s
 
 2. **Search Engine Limits**
 	 - HTML-based engines may change their markup over time, so parser fixture tests matter
-	 - Search engines may temporarily rate-limit frequent requests
-	 - Frequent requests may cause temporary rate limiting
+	 - Search engines do not publish strict quotas; use them reasonably
+	 - Frequent requests may trigger temporary rate limiting
 
 3. **Timeout Settings**
 	 - Default timeout per engine is 4 seconds
@@ -633,6 +623,21 @@ curl -X POST "https://$YOUR-DOMAIN/search" \
 curl "https://$YOUR-DOMAIN/search?q=cloudflare&token=$YOUR-TOKEN"
 ```
 
+#### Authentication Methods
+
+Protected endpoints (`/search`, `/content`, `/markdown`, `/auth/verify`) accept any of the following:
+
+- `Authorization: Bearer <token>` header (preferred)
+- `x-api-key: <token>` header
+- `token` query/body parameter (backward compatible)
+- Session cookie, issued automatically when you open the web UI
+
+#### Session Cookie
+
+When you open the web UI at `/`, the Worker automatically issues a `search_mcp_sid` cookie (24-hour TTL, sliding expiry) and stores it in `SEARCH_STATE_KV` (or an in-memory fallback when KV is not bound). The demo page can then call the protected endpoints without a token, authenticated via this session. Click "Verify" on the page to confirm the session is active. Programmatic API callers should still use a token.
+
+When `AUTH_REQUIRED = "true"` but `TOKEN` is not configured, protected endpoints return `503 AUTH_TOKEN_NOT_CONFIGURED` instead of `401`, to signal a deployment misconfiguration rather than a client auth failure.
+
 ## FAQ
 
 ### Q: Why do some search engines return empty results?
@@ -653,21 +658,11 @@ A: Recommendations:
 - Bind `SEARCH_KV` and tune `CACHE_TTL_SECONDS`
 - Use `STALE_CACHE_TTL_SECONDS` to improve availability when upstream engines fail
 - Bind `SEARCH_STATE_KV` so rate limiting and engine health are shared across isolates
-- Adjust `DEFAULT_TIMEOUT`, `HEDGED_FALLBACK_DELAY_MS`, `FALLBACK_MIN_RESULTS`, and `FALLBACK_MIN_CONTRIBUTING_ENGINES` appropriately
+- Adjust `DEFAULT_TIMEOUT`, `FALLBACK_MIN_RESULTS`, and `FALLBACK_MIN_CONTRIBUTING_ENGINES` appropriately
 
-### Q: How does fallback work?
+### Q: How does the search work?
 
-A: The gateway tries engines in order. By default:
-
-1. `startpage`
-2. `duckduckgo`
-3. `brave`
-4. `mojeek`
-5. `bing`
-
-It stops once deduplicated results reach `FALLBACK_MIN_RESULTS` and at least `FALLBACK_MIN_CONTRIBUTING_ENGINES` engines have contributed results.
-
-If the primary engine is still slow after `HEDGED_FALLBACK_DELAY_MS`, the gateway starts the next fallback early to reduce tail latency.
+A: `engines` is required. All requested engines start in parallel — there is no priority chain and no hedged fallback. Once deduplicated results reach `FALLBACK_MIN_RESULTS` from at least `FALLBACK_MIN_CONTRIBUTING_ENGINES` engines, the remaining in-flight engines are aborted (early stop). Unresponsive engines are reported in `unresponsive_engines` and recorded in health state, but health no longer affects which engines run.
 
 ### Q: How can I protect the service from abuse?
 
@@ -683,6 +678,8 @@ Authentication failure returns a 401 error.
 ### Q: Does rate limiting work globally?
 
 A: If `SEARCH_STATE_KV` is bound, counters are shared across isolates and are suitable for basic abuse protection. Cloudflare KV writes are eventually consistent, so this is not a strict atomic global limiter; use Durable Objects later if you need hard global consistency.
+
+Rate-limit buckets are keyed by auth method: token requests use the token, session-cookie requests use `session:<id>` (so web UI users do not share a bucket with anonymous IPs), and unauthenticated requests fall back to the caller IP.
 
 ## Disclaimer
 
@@ -704,11 +701,5 @@ Issues and Pull Requests are welcome!
 
 ## Related Links
 
-- [Project GitHub](https://github.com/Yrobot/cloudflare-search)
+- [Project GitHub](https://github.com/endday/search-mcp)
 - [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)
-
-## Support the Project
-
-If this project helps you, you can buy the author a coffee ☕
-
-<image src="https://yrobot.top/donate_wx.jpeg" width="300"/>

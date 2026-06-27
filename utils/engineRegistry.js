@@ -5,10 +5,12 @@ import { duckDuckGoAdapter } from "./searchDuckDuckGo.js";
 import { mojeekAdapter } from "./searchMojeek.js";
 import { qwantAdapter } from "./searchQwant.js";
 import { startpageAdapter } from "./searchStartpage.js";
+import { toutiaoAdapter } from "./searchToutiao.js";
 import { yahooAdapter } from "./searchYahoo.js";
 
 const ENGINE_REGISTRY = {
   bing: bingAdapter,
+  toutiao: toutiaoAdapter,
   startpage: startpageAdapter,
   mojeek: mojeekAdapter,
   duckduckgo: duckDuckGoAdapter,
@@ -39,18 +41,22 @@ export function normalizeRequestedEngines(engines) {
     .filter(Boolean);
 }
 
+/**
+ * Resolve the engines the caller explicitly requested.
+ * `engines` is required at the API layer; we no longer fall back to
+ * `env.DEFAULT_ENGINES` here. An empty selection bubbles up as an empty
+ * `enabledEngines` so the caller can surface a MISSING_ENGINES error.
+ * `env.SUPPORTED_ENGINES` is still used to filter out engines the deployment
+ * does not recognize.
+ */
 export function resolveEngineSelection(engines) {
   const requestedEngines = normalizeRequestedEngines(engines);
-  const baseOrder =
-    requestedEngines.length > 0
-      ? requestedEngines
-      : normalizeRequestedEngines(env.DEFAULT_ENGINES);
   const supportedEngines = new Set(env.SUPPORTED_ENGINES);
   const seen = new Set();
   const enabledEngines = [];
   const skippedEngines = [];
 
-  for (const engine of baseOrder) {
+  for (const engine of requestedEngines) {
     if (seen.has(engine)) {
       continue;
     }
@@ -78,7 +84,7 @@ export function resolveEngineSelection(engines) {
   }
 
   return {
-    requestedEngines: baseOrder,
+    requestedEngines,
     enabledEngines,
     skippedEngines,
   };
