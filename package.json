@@ -1,8 +1,9 @@
 {
   "name": "@endday/search-mcp",
   "version": "1.0.2",
-  "description": "MCP server exposing aggregated web search and content extraction tools, backed by a Cloudflare Workers gateway",
+  "description": "Local MCP server for aggregated web search and content extraction",
   "type": "module",
+  "types": "index.d.ts",
   "publishConfig": {
     "access": "public"
   },
@@ -11,24 +12,27 @@
     "search-mcp": "./mcp/search-mcp.js"
   },
   "files": [
-    "mcp"
+    "mcp",
+    "src",
+    "envs.js",
+    "index.d.ts"
   ],
   "scripts": {
     "start": "node mcp/search-mcp.js",
     "test": "node --test test",
-    "smoke": "node scripts/smoke-test.js",
-    "update:source-authority": "node scripts/update-source-authority.js"
+    "smoke": "node scripts/mcp-local-smoke.js",
+    "update:source-authority": "node scripts/update-source-authority.js",
+    "docs:dev": "npm --prefix docs-site run docs:dev",
+    "docs:build": "npm --prefix docs-site run docs:build",
+    "docs:preview": "npm --prefix docs-site run docs:preview"
   },
   "keywords": [
     "mcp",
     "search",
     "web-search",
-    "cloudflare",
-    "cloudflare-workers",
     "self-hosted",
     "ai-agent",
     "openclaw",
-    "free-search",
     "privacy",
     "aggregated-search",
     "startpage",
@@ -48,6 +52,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@mozilla/readability": "^0.6.0",
+    "impit": "^0.14.2",
     "linkedom": "^0.18.12",
     "node-html-parser": "^7.1.0"
   },

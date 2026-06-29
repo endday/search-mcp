@@ -1,0 +1,59 @@
+:root {
+  --vp-c-brand-1: #0f5b52;
+  --vp-c-brand-2: #177467;
+  --vp-c-brand-3: #21907f;
+  --vp-c-brand-soft: rgba(15, 91, 82, 0.14);
+  --vp-c-bg: #f2eee6;
+  --vp-c-bg-alt: #ebe4d8;
+  --vp-c-bg-soft: #f8f4ec;
+  --vp-c-divider: rgba(20, 18, 14, 0.12);
+  --vp-c-text-1: #171411;
+  --vp-c-text-2: #655d52;
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #123b35 20%, #d48245 88%);
+  --vp-home-hero-image-background-image:
+    radial-gradient(circle at 30% 30%, rgba(212, 130, 69, 0.38), transparent 38%),
+    radial-gradient(circle at 70% 70%, rgba(15, 91, 82, 0.32), transparent 42%);
+  --vp-home-hero-image-filter: blur(42px);
+}
+
+.dark {
+  --vp-c-bg: #14110d;
+  --vp-c-bg-alt: #1b1712;
+  --vp-c-bg-soft: #201b15;
+  --vp-c-divider: rgba(245, 236, 223, 0.1);
+  --vp-c-text-1: #f3ebdf;
+  --vp-c-text-2: #b8ab99;
+  --vp-home-hero-name-background: linear-gradient(120deg, #9ddbcc 18%, #f0ad73 92%);
+}
+
+.VPNavBar {
+  background: color-mix(in srgb, var(--vp-c-bg) 84%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.VPFeature {
+  border: 1px solid var(--vp-c-divider);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,255,255,0.18)),
+    var(--vp-c-bg-soft);
+  border-radius: 22px;
+}
+
+.dark .VPFeature {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)),
+    var(--vp-c-bg-soft);
+}
+
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.VPHero .name,
+.VPHero .text {
+  letter-spacing: -0.02em;
+}
+
+.vp-doc a {
+  text-decoration-thickness: 1px;
+}

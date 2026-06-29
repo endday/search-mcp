@@ -1,0 +1,13 @@
+{
+  "name": "search-mcp-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "node ./node_modules/vitepress/dist/node/cli.js dev .",
+    "docs:build": "node ./node_modules/vitepress/dist/node/cli.js build .",
+    "docs:preview": "node ./node_modules/vitepress/dist/node/cli.js preview ."
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}

@@ -1,72 +1,89 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
 ## Project Overview
 
-Search MCP is a multi-engine aggregated search API service built on Cloudflare Workers. It exposes SearXNG-compatible `/search`, `/content`, and `/markdown` endpoints, plus a web UI. A companion MCP server (`mcp/search-mcp.js`) lets AI assistants (Claude Code, OpenClaw, Codex) call the deployed Worker. Published to npm as `@endday/search-mcp`; source at https://github.com/endday/search-mcp.
+Search MCP is a local-only MCP server for multi-engine web search and readable content extraction. The npm entrypoint is `mcp/search-mcp.js`, which serves MCP tools over stdio for clients such as Claude Code, Claude Desktop, OpenClaw, and Codex. Published to npm as `@endday/search-mcp`; source at https://github.com/endday/search-mcp.
 
 ## Commands
 
 ```bash
 npm test                          # Run all tests (node --test test)
-npm run smoke                     # Smoke test against a deployed Worker (SMOKE_BASE_URL + SMOKE_TOKEN)
+npm run smoke                     # Local smoke test for search/content flows
 npm run update:source-authority   # Regenerate data/sourceAuthority.generated.{json,js} from upstream lists
-wrangler deploy                   # Deploy Worker to Cloudflare
-wrangler dev                      # Local dev server
+npm run docs:dev                  # Start the VitePress docs site
 ```
 
 Single test file:
 ```bash
-node --test test/worker.test.js
+node --test test/parser.test.js
 ```
 
 Single test case (use `-t` with name filter):
 ```bash
-node --test --test-name-pattern="returns cached response" test/worker.test.js
+node --test --test-name-pattern="parses Bing organic HTML" test/parser.test.js
 ```
 
 ## Architecture
 
 ### Request flow
 
-`worker.js` is the entry point. It parses the route, runs auth/rate-limit, then dispatches:
+Main source code lives under `src/`.
 
-- `/search` -> `utils/searchGateway.js::searchAllWithMeta` -> engine adapters in parallel (`engines` required, no priority chain) -> `utils/index.js::dedupeAndRankResults` (canonical URL + authority boost)
-- `/content` -> single-URL Readability extraction
-- `/markdown` -> Cloudflare Browser Rendering (optional, needs `CF_BROWSER_RENDERING_*` env)
+The package is split into a few layers/directories:
+
+- `src/mcp/`: MCP config, schemas, stdio server wiring, and tool handlers
+- `src/mcp/local/`: local search/content orchestration used by MCP tools
+- `src/search/`: engine adapters, registry, upstream request/session handling, ranking
+- `src/content/`: bounded upstream fetching and readable content extraction
+- `src/platform/`: shared HTTP, logging, metrics, state, auth, cache, and task helpers
+- `src/core/`: shared low-level helpers such as errors, crypto, and HTML parsing
+
+Main flows:
+
+- `mcp/search-mcp.js` -> `src/mcp/index.js::main`
+- `web_search` -> `src/mcp/tools/webSearch.js` -> `src/mcp/local/search.js`
+- `content` -> `src/mcp/tools/content.js` -> `src/mcp/local/content.js` / `src/content/*`
+- `jina_content` -> `src/mcp/tools/jinaContent.js`
 
 ### Engine adapters
 
-Each `utils/search*.js` exports an adapter `{ name, supports, search({query, signal}) }`. The gateway (`searchGateway.js`) requires `engines` and starts them all in parallel (no priority chain, no hedging), with:
-- early stop: aborts remaining in-flight engines once `FALLBACK_MIN_RESULTS` results are gathered from at least `FALLBACK_MIN_CONTRIBUTING_ENGINES` engines
-- per-engine health tracking in `utils/health.js` (KV-backed via `SEARCH_STATE_KV`) records successes/failures, but no longer affects which engines run (cooling is observability-only)
+Each `src/search/engines/*.js` exports an adapter `{ name, supports, tier, requestPolicy, search({query, signal}) }`. The gateway (`src/search/gateway.js`) requires `engines` and executes them tier by tier, with:
+- per-tier parallelism and early stop once `FALLBACK_MIN_RESULTS` results are gathered from at least `FALLBACK_MIN_CONTRIBUTING_ENGINES` engines
+- per-engine health tracking in `src/platform/health.js` (KV-backed via `SEARCH_STATE_KV`) records successes/failures, but no longer affects which engines run (cooling is observability-only)
+- background writes for cache, health, and upstream session through `src/platform/tasks.js`
 - `env.DEFAULT_ENGINES` only seeds the demo page's default checked chips; the API never falls back to it
 
-To add a new engine: write `utils/search<Name>.js` exporting the adapter shape, register it in `utils/engineRegistry.js::ENGINE_REGISTRY`, and add the name to `envs.js::createDefaultEnv` `SUPPORTED_ENGINES`.
+To add a new engine: write `src/search/engines/<name>.js` exporting the adapter shape, register it in `src/search/engineRegistry.js::ENGINE_REGISTRY`, and add the name to `envs.js::createDefaultEnv` `SUPPORTED_ENGINES`.
+
+### Refactor boundary
+
+Keep these boundaries intact when extending the package:
+
+- MCP protocol wiring stays in `src/mcp/`
+- local tool orchestration stays in `src/mcp/local/`
+- target URL safety and bounded upstream fetching stay in `src/content/fetch.js`
+- search orchestration stays in `src/search/gateway.js`
+
+Do not import `*.impl.js` files directly from new code. Treat `src/**/foo.js` as the public module entrypoint and `foo.impl.js` as an internal implementation detail.
 
 ### Source authority
 
-`utils/index.js::dedupeAndRankResults` applies deterministic boosts from `data/sourceAuthority.generated.js` (regenerated by `npm run update:source-authority` from Iffy.news + misinformation domain lists). Project-specific overrides live in `data/sourceAuthority.overrides.json` and are merged last. Each result gets a `source_type` (official / model_repo / paper / media / blog / low_credibility / ...) and an `authority_score`. `/search` accepts `min_authority_score`, `include_source_types`, `exclude_source_types` filters.
+`src/search/ranking.js::dedupeAndRankResults` applies deterministic boosts from `data/sourceAuthority.generated.js` (regenerated by `npm run update:source-authority` from Iffy.news + misinformation domain lists). Project-specific overrides live in `data/sourceAuthority.overrides.json` and are merged last. Each result gets a `source_type` (official / model_repo / paper / media / blog / low_credibility / ...) and an `authority_score`.
 
 ### Environment config
 
-`envs.js` holds all defaults (timeouts, engine lists, cache TTLs, rate limits, health thresholds, CORS, auth). The Worker reads from Cloudflare env vars; the MCP server reads `SEARCH_MCP_URL` / `SEARCH_MCP_TOKEN` from `process.env`. Don't put real `TOKEN` in `wrangler.toml` -- use `wrangler secret put TOKEN`.
-
-### KV bindings
-
-- `SEARCH_KV` (optional): response cache. `utils/cache.js` implements fresh-cache + `stale-if-error` using `CACHE_TTL_SECONDS` / `STALE_CACHE_TTL_SECONDS`.
-- `SEARCH_STATE_KV` (optional, already bound in `wrangler.toml`): cross-isolate rate-limit counters and engine health state (`utils/stateKv.js`).
+`envs.js` holds defaults for engine lists, timeouts, caching, rate limits, and related runtime behavior. The MCP server reads process env such as `SEARCH_MCP_CLIENT_ID`, `SEARCH_MCP_UPSTREAM_CLIENT`, `SEARCH_MCP_PROXY_URL`, `SEARCH_MCP_IGNORE_TLS_ERRORS`, `JINA_API_KEY`, and `JINA_BASE_URL`.
 
 ### MCP server
 
-`mcp/search-mcp.js` is a standalone Node script (not a Worker). It exposes tools `web_search`, `search`, `content` over stdio via `@modelcontextprotocol/sdk`. It's published to npm as `@endday/search-mcp`.
+`mcp/search-mcp.js` is a standalone Node script. It exposes tools `web_search`, `content`, and `jina_content` over stdio via `@modelcontextprotocol/sdk`. It's published to npm as `@endday/search-mcp`.
 
 ## Conventions
 
-- **Pure `.then()` chains** over `async/await` (see `PREFERENCES.md`).
-- **CSS classes over inline styles** in the web UI template (`utils/getHTML.js`).
+- Match the surrounding async style within the file you are editing; don't mix styles gratuitously.
 - Preserve raw backend values; add `*_text` / `*_label` display fields separately.
-- Tests use `node:test` with in-memory `MemoryKv` and HTML fixtures in `test/fixtures/`. The test file mocks `globalThis.fetch` to return fixture HTML per engine.
-- `envs.js::setEnv` is the only place that normalizes env arrays -- call it from tests, not ad-hoc parsers elsewhere.
-- `index.d.ts` is the single source of truth for response/request types -- keep it in sync with `worker.js` payloads.
+- Tests use `node:test` and HTML fixtures in `test/fixtures/`. The tests mock `globalThis.fetch` to return fixture HTML per engine.
+- `envs.js` is the central place for runtime defaults and env normalization; keep ad-hoc env parsing out of feature code.
+- `index.d.ts` is the published type surface; keep it in sync with the MCP-facing payloads.

@@ -1,38 +1,42 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { afterEach, test } from "node:test";
 
 import {
   extractBingRedirectUrl,
   parseBingResults,
   parseBingRssResults,
   default as searchBing,
-} from "../utils/searchBing.js";
+} from "../src/search/engines/bing.js";
 import {
   parseBraveResults,
   default as searchBrave,
-} from "../utils/searchBrave.js";
+} from "../src/search/engines/brave.js";
 import {
   parseDuckDuckGoResults,
   default as searchDuckDuckGo,
-} from "../utils/searchDuckDuckGo.js";
-import { parseMojeekResults } from "../utils/searchMojeek.js";
+} from "../src/search/engines/duckduckgo.js";
+import { parseMojeekResults } from "../src/search/engines/mojeek.js";
 import {
   parseQwantResults,
   default as searchQwant,
-} from "../utils/searchQwant.js";
+} from "../src/search/engines/qwant.js";
 import {
   parseStartpageResults,
   resetStartpageRequestState,
   default as searchStartpage,
-} from "../utils/searchStartpage.js";
+} from "../src/search/engines/startpage.js";
 import {
   extractYahooRedirectUrl,
   parseYahooResults,
   default as searchYahoo,
-} from "../utils/searchYahoo.js";
-import { getEngineRegistry } from "../utils/engineRegistry.js";
-import { dedupeAndRankResults } from "../utils/index.js";
+} from "../src/search/engines/yahoo.js";
+import { parseToutiaoResults } from "../src/search/engines/toutiao.js";
+import { getEngineRegistry } from "../src/search/engineRegistry.js";
+import { dedupeAndRankResults } from "../src/search/ranking.js";
+import { fetchSearchText } from "../src/search/engineRequest.js";
+import { resetUpstreamSessionState } from "../src/search/upstreamSession.js";
+import { searchLocal } from "../src/mcp/local/search.js";
 
 const fixture = (name) =>
   readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
@@ -68,6 +72,10 @@ function installFetchCapture(handler) {
     },
   };
 }
+
+afterEach(() => {
+  resetUpstreamSessionState();
+});
 
 test("parses Bing organic HTML", async () => {
   const results = parseBingResults(await fixture("bing.html"));
@@ -634,6 +642,14 @@ test("parses Yahoo organic HTML and redirect URLs", async () => {
   assert.equal(results[1].url, "https://example.com/kv");
 });
 
+test("treats Toutiao challenge fixtures as blocked or unparseable upstream", async () => {
+  await assert.rejects(
+    async () => parseToutiaoResults(await fixture("toutiao-openai.html")),
+    (error) =>
+      error?.code === "UPSTREAM_BLOCKED" || error?.code === "UPSTREAM_PARSE_ERROR"
+  );
+});
+
 test("extracts Yahoo redirect URLs safely", () => {
   const redirect =
     "https://r.search.yahoo.com/_ylt=x/RV=2/RU=https%3A%2F%2Fexample.com%2Fdocs%3Fa%3D1/RK=2/RS=x";
@@ -691,6 +707,76 @@ test("requests Yahoo with domain, time, page, and cookie preferences", async () 
   assert.equal(url.searchParams.get("pz"), "7");
   assert.equal(call.init.referrer, "https://uk.search.yahoo.com/");
   assert.match(getCapturedHeader(call.init, "cookie"), /sB=v=1&vm=p&fl=1&vl=lang_en/);
+});
+
+test("reuses a stable browser profile per client and engine", async () => {
+  const userAgents = [];
+  const fetchCapture = installFetchCapture((_url, init) => {
+    userAgents.push(getCapturedHeader(init, "user-agent"));
+    return new Response("<html><body>ok</body></html>", {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+      },
+    });
+  });
+
+  try {
+    await fetchSearchText("https://www.bing.com/search?q=workers", {
+      engine: "bing",
+      engineLabel: "Bing",
+      clientId: "session:stable-1",
+    });
+    await fetchSearchText("https://www.bing.com/search?q=workers", {
+      engine: "bing",
+      engineLabel: "Bing",
+      clientId: "session:stable-1",
+    });
+  } finally {
+    fetchCapture.restore();
+  }
+
+  assert.equal(userAgents.length, 2);
+  assert.equal(userAgents[0], userAgents[1]);
+});
+
+test("persists upstream cookies across requests for the same client and engine", async () => {
+  const cookies = [];
+  const fetchCapture = installFetchCapture((_url, init, callCount) => {
+    cookies.push(getCapturedHeader(init, "cookie"));
+    return new Response("<html><body>ok</body></html>", {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        ...(callCount === 1 ? { "set-cookie": "testpref=1; Path=/; HttpOnly" } : {}),
+      },
+    });
+  });
+
+  try {
+    await fetchSearchText("https://search.brave.com/search?q=workers", {
+      engine: "brave",
+      engineLabel: "Brave",
+      clientId: "session:cookie-1",
+      cookies: {
+        country: "us",
+      },
+    });
+    await fetchSearchText("https://search.brave.com/search?q=workers", {
+      engine: "brave",
+      engineLabel: "Brave",
+      clientId: "session:cookie-1",
+      cookies: {
+        country: "us",
+      },
+    });
+  } finally {
+    fetchCapture.restore();
+  }
+
+  assert.match(cookies[0], /country=us/);
+  assert.match(cookies[1], /country=us/);
+  assert.match(cookies[1], /testpref=1/);
 });
 
 test("deduplicates by canonical URL and prefers higher priority engine", () => {
@@ -815,4 +901,101 @@ test("applies generated manual source authority overrides", () => {
   assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
   assert.equal(results[0].source_type, "official");
   assert.ok(results[0].authority_score > results[1].authority_score);
+});
+
+test("boosts official Chinese brand results ahead of ambiguous matches", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "深度求索 V4",
+    registry,
+    engineResults: [
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "深度系统 V4 使用体验",
+            url: "https://example.com/deepin-v4",
+            description: "deepin 相关内容和使用体验。",
+          },
+          {
+            title: "DeepSeek | 深度求索 V4",
+            url: "https://www.deepseek.com/v4",
+            description: "DeepSeek 官方模型页面。",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].url, "https://www.deepseek.com/v4");
+  assert.equal(results[0].source_type, "official");
+});
+
+test("demotes heavily Chinese results for latin-only queries when an official English result exists", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "cloudflare workers",
+    registry,
+    engineResults: [
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "Cloudflare Workers 完全指南：从入门到实战",
+            url: "https://example.com/cloudflare-workers-guide",
+            description: "中文教程，介绍 Cloudflare Workers 的基础使用和部署。",
+          },
+          {
+            title: "Cloudflare Workers · Cloudflare Developers",
+            url: "https://developers.cloudflare.com/workers/",
+            description: "Official Cloudflare Workers developer documentation.",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
+  assert.equal(results[0].source_type, "official");
+});
+
+test("searchLocal infers en-US for latin-only queries when language is omitted", async () => {
+  const originalFetch = globalThis.fetch;
+  let observedUrl = "";
+
+  globalThis.fetch = async (url) => {
+    observedUrl = String(url);
+    return new Response(
+      `
+        <html>
+          <body>
+            <main id="b_results">
+              <li class="b_algo">
+                <h2><a href="https://example.com/workers">Cloudflare Workers</a></h2>
+                <div class="b_caption"><p>Deploy code globally.</p></div>
+              </li>
+            </main>
+          </body>
+        </html>
+      `,
+      {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      }
+    );
+  };
+
+  try {
+    const result = await searchLocal("cloudflare workers", ["bing"]);
+
+    assert.equal(result.results[0].engine, "bing");
+    assert.match(observedUrl, /[?&]setlang=en-US(?:&|$)/);
+    assert.match(observedUrl, /[?&]mkt=en-US(?:&|$)/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
