@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: Search MCP
-  text: 本地 MCP 搜索服务
+  text: 首个公开版本文档
   tagline: 一个面向 MCP 客户端的本地搜索聚合与正文提取服务。
   image:
     src: /mark.svg
@@ -20,12 +20,12 @@ hero:
       link: https://github.com/endday/search-mcp
 
 features:
-  - title: 只走本地 MCP
+  - title: 本地优先
     details: 默认通过本地抓取与解析链路提供 `web_search`、`news_search`、`content` 和 `jina_content`。
+  - title: 多引擎搜索
+    details: 当前支持 `baidu`、`bing`、`startpage`、`duckduckgo`、`brave`、`qwant`、`yahoo`、`mojeek`、`toutiao`。
   - title: 简单接入
     details: 直接通过 `npx -y @endday/search-mcp` 启动，再在 MCP 客户端里配置 `command` 和 `args` 即可。
-  - title: 本地过滤
-    details: 命中本地生成的黑名单域名会直接过滤，普通域名默认大致同权，只保留少量高价值来源正向加分。
 ---
 
 ## 这是什么
@@ -38,6 +38,23 @@ features:
 - `jina_content`
 
 适合需要在 Claude Code、Claude Desktop、Codex、OpenClaw 这类 MCP 客户端里直接接入本地搜索能力的场景。
+
+## 当前支持的搜索引擎
+
+- `baidu`
+- `bing`
+- `startpage`
+- `duckduckgo`
+- `brave`
+- `qwant`
+- `yahoo`
+- `mojeek`
+- `toutiao`
+
+推荐默认组合：
+
+- 中文查询：`baidu`、`bing`
+- 非中文查询：`bing`、`brave`、`yahoo`、`mojeek`
 
 ## 推荐阅读顺序
 
