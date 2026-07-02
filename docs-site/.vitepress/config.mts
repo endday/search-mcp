@@ -4,7 +4,7 @@ export default defineConfig({
   lang: "zh-CN",
   title: "Search MCP",
   description: "Search MCP 本地文档站",
-  base: process.env.GITHUB_ACTIONS ? "/cloudflare-search/" : "/",
+  base: process.env.GITHUB_ACTIONS ? "/search-mcp/" : "/",
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
