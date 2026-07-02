@@ -63,11 +63,19 @@ Optional environment variables:
 ## Exposed Tools
 
 - `web_search`: runs local engine fetch + parse and returns ranked results
+- `news_search`: runs explicit news search across supported news-capable engines
 - `content`: fetches a URL and extracts readable text locally
 - `jina_content`: reads a URL through Jina AI reader
 
+## Ranking And Filtering
+
+- blocked domains are filtered locally from generated denylist subscriptions
+- ordinary domains are treated roughly equally by default
+- only a small set of known high-value sources gets deterministic positive boosts
+
 ## Supported Engines
 
+- `baidu`
 - `bing`
 - `startpage`
 - `duckduckgo`
@@ -77,6 +85,11 @@ Optional environment variables:
 - `mojeek`
 - `toutiao`
 
+Recommended defaults in the current local setup:
+
+- Chinese queries: `baidu`, `bing`
+- Non-Chinese queries: `bing`, `brave`, `yahoo`, `mojeek`
+
 ## Dev
 
 Useful commands:
@@ -84,12 +97,20 @@ Useful commands:
 ```bash
 npm test
 npm run smoke
+npm run update:blocklist
 npm run docs:dev
 ```
 
 ## Docs
 
 Long-form docs now live in the VitePress site under [docs-site](./docs-site).
+The docs site is intended to be published with GitHub Pages, so a Cloudflare Worker homepage is no longer needed.
+
+For GitHub Pages:
+
+1. Enable `GitHub Pages` in the repository settings.
+2. Set the source to `GitHub Actions`.
+3. The workflow at `.github/workflows/docs-pages.yml` will build and deploy the VitePress site.
 
 ## License
 

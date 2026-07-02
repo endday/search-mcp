@@ -40,14 +40,19 @@ function parsePositiveInt(value, fallback) {
 function filterEnginesByCapabilities(
   engineNames,
   registry,
-  { time_range, pageno }
+  { vertical = "web", time_range, pageno }
 ) {
   const page = parseNonNegativeInt(pageno, 0);
   const enabledEngines = [];
   const skippedEngines = [];
 
   for (const engineName of engineNames) {
-    const supports = registry[engineName]?.supports || {};
+    const adapter = registry[engineName];
+    const baseSupports = adapter?.supports || {};
+    const supports =
+      typeof baseSupports[vertical] === "object"
+        ? { ...baseSupports, ...baseSupports[vertical] }
+        : baseSupports;
 
     if (time_range && supports.time_range === false) {
       skippedEngines.push({
@@ -109,6 +114,7 @@ function startEngineSearch(adapter, params) {
 }
 
 function buildSearchResponse({
+  vertical = "web",
   query,
   enabledEngines,
   skippedEngines,
@@ -116,6 +122,7 @@ function buildSearchResponse({
   results,
 }) {
   return {
+    vertical,
     query,
     number_of_results: results.length,
     enabled_engines: enabledEngines,
@@ -152,6 +159,7 @@ function abortActiveSearches(activeSearches) {
 async function runParallelSearch({
   registry,
   engines,
+  vertical,
   query,
   language,
   time_range,
@@ -195,6 +203,7 @@ async function runParallelSearch({
       activeSearches.set(
         engineName,
         startEngineSearch(registry[engineName], {
+          vertical,
           query,
           language,
           time_range,
@@ -280,6 +289,7 @@ async function runParallelSearch({
 }
 
 export async function searchAllWithMeta({
+  vertical = "web",
   query,
   engines,
   language,
@@ -289,11 +299,12 @@ export async function searchAllWithMeta({
   runtimeContext,
 }) {
   const registry = getEngineRegistry();
-  const engineSelection = resolveEngineSelection(engines);
+  const engineSelection = resolveEngineSelection(engines, { vertical });
   const capabilitySelection = filterEnginesByCapabilities(
     engineSelection.enabledEngines,
     registry,
     {
+      vertical,
       time_range,
       pageno,
     }
@@ -314,6 +325,7 @@ export async function searchAllWithMeta({
   }
 
   const cacheParams = {
+    vertical,
     query,
     requested_engines: engineSelection.requestedEngines,
     engines: enabledEngines,
@@ -340,6 +352,7 @@ export async function searchAllWithMeta({
   const searchOutcome = await runParallelSearch({
     registry,
     engines: fallbackOrder,
+    vertical,
     query,
     language,
     time_range,
@@ -367,6 +380,7 @@ export async function searchAllWithMeta({
   }
 
   const response = buildSearchResponse({
+    vertical,
     query,
     enabledEngines,
     skippedEngines,

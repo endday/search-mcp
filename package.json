@@ -1,19 +1,28 @@
 {
   "name": "@endday/search-mcp",
-  "version": "1.0.2",
+  "version": "1.0.0",
   "description": "Local MCP server for aggregated web search and content extraction",
   "type": "module",
-  "types": "index.d.ts",
+  "main": "./index.js",
+  "types": "./index.d.ts",
   "publishConfig": {
     "access": "public"
   },
-  "main": "mcp/search-mcp.js",
   "bin": {
-    "search-mcp": "./mcp/search-mcp.js"
+    "search-mcp": "mcp/search-mcp.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./cli": "./mcp/search-mcp.js"
   },
   "files": [
-    "mcp",
-    "src",
+    "data/blocklist.generated.js",
+    "index.js",
+    "mcp/search-mcp.js",
+    "src/**/*.js",
     "envs.js",
     "index.d.ts"
   ],
@@ -21,7 +30,7 @@
     "start": "node mcp/search-mcp.js",
     "test": "node --test test",
     "smoke": "node scripts/mcp-local-smoke.js",
-    "update:source-authority": "node scripts/update-source-authority.js",
+    "update:blocklist": "node scripts/update-blocklist.js",
     "docs:dev": "npm --prefix docs-site run docs:dev",
     "docs:build": "npm --prefix docs-site run docs:build",
     "docs:preview": "npm --prefix docs-site run docs:preview"
@@ -47,7 +56,7 @@
   "license": "GPL-3.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/endday/search-mcp.git"
+    "url": "git+https://github.com/endday/search-mcp.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

@@ -120,6 +120,10 @@ function resolveYahooDomain(language) {
   );
 }
 
+function resolveYahooNewsDomain(language) {
+  return resolveYahooDomain(language);
+}
+
 function buildYahooCookie(language) {
   const { yahooLanguage } = getYahooLanguageParts(language);
 
@@ -220,9 +224,99 @@ export function parseYahooResults(html) {
   return normalized;
 }
 
+export function parseYahooNewsResults(html) {
+  if (isYahooChallengeResponse(html)) {
+    throwYahooChallengeError();
+  }
+
+  const root = parseHtml(html);
+  const resultNodes = root.querySelectorAll(".NewsArticle");
+  const results = [];
+
+  for (const node of resultNodes) {
+    const linkNode =
+      node.querySelector(".s-title a[href]") ||
+      node.querySelector(".compArticleList a[href]");
+
+    if (!linkNode) {
+      continue;
+    }
+
+    const rawUrl = ensureAbsoluteUrl(
+      linkNode.getAttribute("href"),
+      "https://news.search.yahoo.com"
+    );
+
+    results.push({
+      title: cleanText(linkNode.innerHTML || linkNode.text || ""),
+      url: extractYahooRedirectUrl(rawUrl),
+      description: cleanText(
+        node.querySelector(".s-desc")?.innerHTML ||
+          node.querySelector(".s-desc")?.text ||
+          ""
+      ),
+      source_name: cleanText(
+        node.querySelector(".s-source")?.innerHTML ||
+          node.querySelector(".s-source")?.text ||
+          ""
+      ),
+      published_text: cleanText(
+        node.querySelector(".s-time")?.innerHTML ||
+          node.querySelector(".s-time")?.text ||
+          ""
+      ).replace(/\s*[·•]\s*$/, ""),
+    });
+  }
+
+  const normalized = normalizeResults(results);
+  if (normalized.length === 0) {
+    throw new ApiError({
+      status: 502,
+      code: "UPSTREAM_PARSE_ERROR",
+      category: "upstream",
+      message: "Yahoo News parser could not find organic results",
+    });
+  }
+
+  return normalized;
+}
+
 async function searchYahoo(params) {
-  const { query, language, time_range, pageno, signal, runtimeContext } = params;
+  const {
+    vertical = "web",
+    query,
+    language,
+    time_range,
+    pageno,
+    signal,
+    runtimeContext,
+  } = params;
   const page = resolvePageNumber(pageno);
+
+  if (vertical === "news") {
+    const domain = resolveYahooNewsDomain(language);
+    const searchUrl = new URL(`https://${domain}/search`);
+    searchUrl.searchParams.set("p", query);
+    searchUrl.searchParams.set("fr", "news");
+
+    const html = await fetchSearchText(searchUrl.toString(), {
+      engine: "yahoo",
+      engineLabel: "Yahoo",
+      signal,
+      language,
+      cookies: {
+        sB: buildYahooCookie(language),
+      },
+      referrer: `https://${domain}/`,
+      runtimeContext,
+      blockedStatuses: [403, 429],
+      isBlocked: isYahooChallengeResponse,
+      blockedSurface: "html",
+    });
+
+    return parseYahooNewsResults(html);
+  }
+
   const domain = resolveYahooDomain(language);
   const searchUrl = new URL(`https://${domain}/search`);
   searchUrl.searchParams.set("p", query);
@@ -269,9 +363,14 @@ export const yahooAdapter = {
     minRequestIntervalMs: 200,
   },
   supports: {
+    verticals: ["web", "news"],
     language: true,
     time_range: true,
     pageno: true,
+    news: {
+      time_range: false,
+      pageno: false,
+    },
   },
   isAvailable: () => true,
   search: searchYahoo,

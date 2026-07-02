@@ -7,14 +7,21 @@ import {
 
 import {
   CONTENT_INPUT_SCHEMA,
+  createNewsSearchInputSchema,
   createSearchInputSchema,
   JINA_CONTENT_INPUT_SCHEMA,
 } from "./schemas.js";
+import { getSupportedEnginesForVertical } from "../search/engineRegistry.js";
 import { handleWebSearch } from "./tools/webSearch.js";
+import { handleNewsSearch } from "./tools/newsSearch.js";
 import { handleContent } from "./tools/content.js";
 import { handleJinaContent } from "./tools/jinaContent.js";
 
 export function createServer(config) {
+  const newsEngineSet = new Set(getSupportedEnginesForVertical("news"));
+  const newsEngines =
+    config.newsEngines ||
+    config.allEngines.filter((engineName) => newsEngineSet.has(engineName));
   const server = new Server(
     { name: "search-mcp", version: "2.0.0" },
     { capabilities: { tools: {} } }
@@ -27,6 +34,12 @@ export function createServer(config) {
         description:
           "Search the web with local-first MCP execution. Returns deduplicated results with snippets and source authority scores.",
         inputSchema: createSearchInputSchema(config.allEngines),
+      },
+      {
+        name: "news_search",
+        description:
+          "Search recent news with an explicit news-search capability. Use this instead of web_search when the caller needs news results rather than general web pages.",
+        inputSchema: createNewsSearchInputSchema(newsEngines),
       },
       {
         name: "content",
@@ -43,7 +56,12 @@ export function createServer(config) {
     ],
   };
 
-  const VALID_TOOL_NAMES = new Set(["web_search", "content", "jina_content"]);
+  const VALID_TOOL_NAMES = new Set([
+    "web_search",
+    "news_search",
+    "content",
+    "jina_content",
+  ]);
 
   server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
 
@@ -57,6 +75,10 @@ export function createServer(config) {
 
     if (name === "web_search") {
       return handleWebSearch(config, args);
+    }
+
+    if (name === "news_search") {
+      return handleNewsSearch(config, args);
     }
 
     if (name === "content") {

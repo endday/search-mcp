@@ -107,9 +107,65 @@ export function parseBraveResults(html) {
   return normalizeResults(results);
 }
 
+export function parseBraveNewsResults(html) {
+  if (isBraveChallengeResponse(html)) {
+    throwBraveChallengeError();
+  }
+
+  const root = parseHtml(html);
+  const resultNodes = root
+    .querySelectorAll('.snippet')
+    .filter((node) => node.getAttribute("data-type") === "news");
+  const results = [];
+
+  for (const node of resultNodes) {
+    const linkNode = node.querySelector("a.l1[href]") || node.querySelector("a[href]");
+    const titleNode = node.querySelector(".title");
+    const descriptionNode = node.querySelector(".generic-snippet .description") || node.querySelector(".content");
+    const sourceNode = node.querySelector(".site-name-content .desktop-small-semibold");
+    const publishedNode =
+      node.querySelector(".site-name-content .desktop-small-regular.t-tertiary") ||
+      node.querySelector(".age-snippet");
+
+    if (!linkNode || !titleNode) {
+      continue;
+    }
+
+    results.push({
+      title: cleanText(titleNode.innerHTML || titleNode.text),
+      url: ensureAbsoluteUrl(
+        linkNode.getAttribute("href"),
+        "https://search.brave.com"
+      ),
+      description: cleanText(
+        descriptionNode?.innerHTML || descriptionNode?.text || ""
+      ),
+      source_name: cleanText(sourceNode?.innerHTML || sourceNode?.text || ""),
+      published_text: cleanText(
+        publishedNode?.innerHTML || publishedNode?.text || ""
+      ),
+    });
+  }
+
+  if (results.length === 0) {
+    throw new ApiError({
+      status: 502,
+      code: "UPSTREAM_PARSE_ERROR",
+      category: "upstream",
+      message: "Brave News parser could not find organic results",
+    });
+  }
+
+  return normalizeResults(results);
+}
+
 async function searchBrave(params) {
-  const { query, language, time_range, signal, runtimeContext } = params;
-  const searchUrl = new URL("https://search.brave.com/search");
+  const { vertical = "web", query, language, time_range, signal, runtimeContext } = params;
+  const searchUrl = new URL(
+    vertical === "news"
+      ? "https://search.brave.com/news"
+      : "https://search.brave.com/search"
+  );
   searchUrl.searchParams.set("q", query);
   searchUrl.searchParams.set("spellcheck", "0");
   searchUrl.searchParams.set("source", "web");
@@ -139,7 +195,7 @@ async function searchBrave(params) {
     blockedSurface: "html",
   });
 
-  return parseBraveResults(html);
+  return vertical === "news" ? parseBraveNewsResults(html) : parseBraveResults(html);
 }
 
 export const braveAdapter = {
@@ -152,9 +208,13 @@ export const braveAdapter = {
     minRequestIntervalMs: 250,
   },
   supports: {
+    verticals: ["web", "news"],
     language: true,
     time_range: true,
     pageno: false,
+    news: {
+      pageno: false,
+    },
   },
   isAvailable: () => true,
   search: searchBrave,

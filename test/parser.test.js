@@ -3,12 +3,19 @@ import { readFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
 
 import {
+  parseBaiduResults,
+  default as searchBaidu,
+} from "../src/search/engines/baidu.js";
+import {
   extractBingRedirectUrl,
+  extractBingNewsRedirectUrl,
+  parseBingNewsRssResults,
   parseBingResults,
   parseBingRssResults,
   default as searchBing,
 } from "../src/search/engines/bing.js";
 import {
+  parseBraveNewsResults,
   parseBraveResults,
   default as searchBrave,
 } from "../src/search/engines/brave.js";
@@ -28,6 +35,7 @@ import {
 } from "../src/search/engines/startpage.js";
 import {
   extractYahooRedirectUrl,
+  parseYahooNewsResults,
   parseYahooResults,
   default as searchYahoo,
 } from "../src/search/engines/yahoo.js";
@@ -84,6 +92,14 @@ test("parses Bing organic HTML", async () => {
   assert.equal(results[0].url, "https://example.com/workers");
 });
 
+test("parses Baidu organic HTML using mu target URLs", async () => {
+  const results = parseBaiduResults(await fixture("baidu.html"));
+  assert.equal(results.length, 2);
+  assert.equal(results[0].title, "Cloudflare Workers");
+  assert.equal(results[0].url, "https://developers.cloudflare.com/workers/");
+  assert.equal(results[1].url, "https://blog.cloudflare.com/workers-launch/");
+});
+
 test("parses Bing fallback result containers without b_algo class", () => {
   const html = `
     <main>
@@ -102,6 +118,36 @@ test("parses Bing fallback result containers without b_algo class", () => {
   assert.equal(results.length, 1);
   assert.equal(results[0].url, "https://example.com/weather");
   assert.equal(results[0].title, "明日天气预报");
+});
+
+test("requests Baidu with page and time filters", async () => {
+  const baiduHtml = await fixture("baidu.html");
+  const fetchCapture = installFetchCapture(() =>
+    new Response(baiduHtml, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+      },
+    })
+  );
+
+  try {
+    await searchBaidu({
+      query: "cloudflare workers",
+      time_range: "month",
+      pageno: 1,
+    });
+  } finally {
+    fetchCapture.restore();
+  }
+
+  const call = fetchCapture.calls[0];
+  const url = new URL(call.url);
+  assert.equal(url.hostname, "www.baidu.com");
+  assert.equal(url.searchParams.get("wd"), "cloudflare workers");
+  assert.equal(url.searchParams.get("pn"), "10");
+  assert.equal(url.searchParams.get("gpc"), "stf=3");
+  assert.equal(call.init.referrer, "https://www.baidu.com/");
 });
 
 test("parses Bing RSS fallback results", () => {
@@ -137,6 +183,34 @@ test("rejects Bing RSS payloads with only malformed items", () => {
   assert.throws(() => parseBingRssResults(xml), {
     code: "UPSTREAM_PARSE_ERROR",
   });
+});
+
+test("parses Bing News RSS results and resolves news redirect URLs", () => {
+  const xml = `<?xml version="1.0" encoding="utf-8" ?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>DeepSeek ships a new release</title>
+          <link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fexample.com%2Fdeepseek-news&amp;mkt=en-us</link>
+          <description>Latest DeepSeek announcement.</description>
+          <pubDate>Mon, 30 Jun 2026 10:00:00 GMT</pubDate>
+          <News:Source>Example News</News:Source>
+        </item>
+      </channel>
+    </rss>`;
+
+  const results = parseBingNewsRssResults(xml);
+
+  assert.equal(results.length, 1);
+  assert.equal(
+    extractBingNewsRedirectUrl(
+      "http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fexample.com%2Fdeepseek-news"
+    ),
+    "https://example.com/deepseek-news"
+  );
+  assert.equal(results[0].url, "https://example.com/deepseek-news");
+  assert.equal(results[0].source_name, "Example News");
+  assert.equal(results[0].published_text, "Mon, 30 Jun 2026 10:00:00 GMT");
 });
 
 test("rejects Bing bot-detection challenge pages", () => {
@@ -266,6 +340,34 @@ test("rejects Brave bot-detection challenge pages", () => {
   assert.throws(() => parseBraveResults(html), {
     code: "UPSTREAM_BLOCKED",
   });
+});
+
+test("parses Brave news result cards", () => {
+  const html = `
+    <html>
+      <body>
+        <div class="snippet" data-type="news">
+          <a class="l1" href="https://example.com/deepseek-news">
+            <div class="site-name-content">
+              <span class="desktop-small-semibold">Example Source</span>
+              <span class="desktop-small-regular t-tertiary">5 hours ago</span>
+            </div>
+            <div class="title">DeepSeek launches a new model</div>
+          </a>
+          <div class="generic-snippet">
+            <div class="description">A concise description of the release.</div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const results = parseBraveNewsResults(html);
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].title, "DeepSeek launches a new model");
+  assert.equal(results[0].source_name, "Example Source");
+  assert.equal(results[0].published_text, "5 hours ago");
 });
 
 test("parses DuckDuckGo HTML redirect links", async () => {
@@ -642,6 +744,32 @@ test("parses Yahoo organic HTML and redirect URLs", async () => {
   assert.equal(results[1].url, "https://example.com/kv");
 });
 
+test("parses Yahoo news result cards", () => {
+  const html = `
+    <html>
+      <body>
+        <div class="dd hometown NewsArticle">
+          <h4 class="s-title">
+            <a href="https://r.search.yahoo.com/_ylt=x/RV=2/RU=https%3A%2F%2Fexample.com%2Fdeepseek-news/RK=2/RS=x">
+              DeepSeek launches a newsworthy release
+            </a>
+          </h4>
+          <span class="s-source">Example Source</span>
+          <span class="s-time">16 hours ago &middot; </span>
+          <p class="s-desc">A concise article summary.</p>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const results = parseYahooNewsResults(html);
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].url, "https://example.com/deepseek-news");
+  assert.equal(results[0].source_name, "Example Source");
+  assert.equal(results[0].published_text, "16 hours ago");
+});
+
 test("treats Toutiao challenge fixtures as blocked or unparseable upstream", async () => {
   await assert.rejects(
     async () => parseToutiaoResults(await fixture("toutiao-openai.html")),
@@ -824,7 +952,7 @@ test("ranks authoritative model sources ahead of generic pages", () => {
         results: [
           {
             title: "DeepSeek model performance roundup",
-            url: "https://example.com/deepseek-v4-performance",
+            url: "https://generic-example.net/deepseek-v4-performance",
             description: "Generic roundup with model performance claims",
           },
           {
@@ -843,7 +971,7 @@ test("ranks authoritative model sources ahead of generic pages", () => {
   assert.ok(results[0].authority_score > results[1].authority_score);
 });
 
-test("demotes generated low-credibility source domains", () => {
+test("filters blocked domains from generated blocklist", () => {
   const registry = getEngineRegistry();
   const results = dedupeAndRankResults({
     query: "election news",
@@ -854,53 +982,21 @@ test("demotes generated low-credibility source domains", () => {
         results: [
           {
             title: "Election news",
-            url: "https://100percentfedup.com/election-news",
-            description: "Generated low credibility list match",
+            url: "https://qastack.cn/election-news",
+            description: "Blocked mirror domain",
           },
           {
             title: "Election news",
-            url: "https://example.com/election-news",
-            description: "Generic unmatched source",
+            url: "https://generic-example.net/election-news",
+            description: "Generic allowed source",
           },
         ],
       },
     ],
   });
 
-  assert.equal(results.length, 2);
-  assert.equal(results[0].url, "https://example.com/election-news");
-  assert.ok(["disinformation", "low_credibility"].includes(results[1].source_type));
-  assert.ok(results[1].authority_score < 0);
-});
-
-test("applies generated manual source authority overrides", () => {
-  const registry = getEngineRegistry();
-  const results = dedupeAndRankResults({
-    query: "cloudflare workers docs",
-    registry,
-    engineResults: [
-      {
-        engine: "bing",
-        results: [
-          {
-            title: "Cloudflare Workers docs",
-            url: "https://developers.cloudflare.com/workers/",
-            description: "Official Workers documentation",
-          },
-          {
-            title: "Cloudflare Workers article",
-            url: "https://example.com/workers",
-            description: "Generic Workers article",
-          },
-        ],
-      },
-    ],
-  });
-
-  assert.equal(results.length, 2);
-  assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
-  assert.equal(results[0].source_type, "official");
-  assert.ok(results[0].authority_score > results[1].authority_score);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].url, "https://generic-example.net/election-news");
 });
 
 test("boosts official Chinese brand results ahead of ambiguous matches", () => {
@@ -914,7 +1010,7 @@ test("boosts official Chinese brand results ahead of ambiguous matches", () => {
         results: [
           {
             title: "深度系统 V4 使用体验",
-            url: "https://example.com/deepin-v4",
+            url: "https://generic-example.net/deepin-v4",
             description: "deepin 相关内容和使用体验。",
           },
           {
@@ -943,7 +1039,7 @@ test("demotes heavily Chinese results for latin-only queries when an official En
         results: [
           {
             title: "Cloudflare Workers 完全指南：从入门到实战",
-            url: "https://example.com/cloudflare-workers-guide",
+            url: "https://generic-example.net/cloudflare-workers-guide",
             description: "中文教程，介绍 Cloudflare Workers 的基础使用和部署。",
           },
           {
@@ -959,6 +1055,39 @@ test("demotes heavily Chinese results for latin-only queries when an official En
   assert.equal(results.length, 2);
   assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
   assert.equal(results[0].source_type, "official");
+});
+
+test("prefers bing and brave for latin queries when result quality is similar", () => {
+  const registry = getEngineRegistry();
+  const results = dedupeAndRankResults({
+    query: "cloudflare workers",
+    registry,
+    engineResults: [
+      {
+        engine: "yahoo",
+        results: [
+          {
+            title: "Cloudflare Workers - Global Serverless Functions Platform",
+            url: "https://www.cloudflare.com/products/workers/",
+            description: "Official Cloudflare Workers product page.",
+          },
+        ],
+      },
+      {
+        engine: "bing",
+        results: [
+          {
+            title: "Overview · Cloudflare Workers docs",
+            url: "https://developers.cloudflare.com/workers/",
+            description: "Official Cloudflare Workers documentation.",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(results[0].engine, "bing");
+  assert.equal(results[0].url, "https://developers.cloudflare.com/workers");
 });
 
 test("searchLocal infers en-US for latin-only queries when language is omitted", async () => {
@@ -997,5 +1126,93 @@ test("searchLocal infers en-US for latin-only queries when language is omitted",
     assert.match(observedUrl, /[?&]mkt=en-US(?:&|$)/);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("searchLocal accepts baidu once registered", async () => {
+  const originalFetch = globalThis.fetch;
+  let observedUrl = "";
+
+  globalThis.fetch = async (url) => {
+    observedUrl = String(url);
+    return new Response(await fixture("baidu.html"), {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+      },
+    });
+  };
+
+  try {
+    const result = await searchLocal("cloudflare workers", ["baidu"]);
+
+    assert.equal(result.results[0].engine, "baidu");
+    assert.match(observedUrl, /^https:\/\/www\.baidu\.com\/s\?/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("searchLocal supports explicit news capability", async () => {
+  const bingNewsRss = `<?xml version="1.0" encoding="utf-8" ?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>DeepSeek news item</title>
+          <link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fexample.com%2Fdeepseek-news</link>
+          <description>News result from Bing.</description>
+          <pubDate>Mon, 30 Jun 2026 10:00:00 GMT</pubDate>
+          <News:Source>Example News</News:Source>
+        </item>
+      </channel>
+    </rss>`;
+
+  const fetchCapture = installFetchCapture((url) => {
+    const hostname = new URL(String(url)).hostname;
+    if (hostname.includes("bing.com")) {
+      return new Response(bingNewsRss, {
+        status: 200,
+        headers: {
+          "content-type": "application/rss+xml; charset=utf-8",
+        },
+      });
+    }
+
+    if (hostname.includes("search.yahoo.com")) {
+      return new Response("<html><body></body></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+    }
+
+    if (hostname.includes("search.brave.com")) {
+      return new Response("<html><body></body></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  try {
+    const result = await searchLocal("DeepSeek", ["bing"], {
+      vertical: "news",
+      count: 1,
+      search_lang: "en-US",
+      clientId: "mcp-local:news-test",
+    });
+
+    assert.equal(result.vertical, "news");
+    assert.equal(result.number_of_results, 1);
+    assert.equal(result.results[0].source_name, "Example News");
+    assert.equal(result.results[0].url, "https://example.com/deepseek-news");
+    assert.match(fetchCapture.calls[0].url, /\/news\/search\?/);
+  } finally {
+    fetchCapture.restore();
   }
 });

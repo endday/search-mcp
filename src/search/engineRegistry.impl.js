@@ -1,4 +1,5 @@
 import { env } from "../../envs.js";
+import { baiduAdapter } from "./engines/baidu.js";
 import { bingAdapter } from "./engines/bing.js";
 import { braveAdapter } from "./engines/brave.js";
 import { duckDuckGoAdapter } from "./engines/duckduckgo.js";
@@ -9,6 +10,7 @@ import { toutiaoAdapter } from "./engines/toutiao.js";
 import { yahooAdapter } from "./engines/yahoo.js";
 
 const ENGINE_REGISTRY = {
+  baidu: baiduAdapter,
   bing: bingAdapter,
   toutiao: toutiaoAdapter,
   startpage: startpageAdapter,
@@ -21,6 +23,11 @@ const ENGINE_REGISTRY = {
 
 export function getEngineRegistry() {
   return ENGINE_REGISTRY;
+}
+
+function getSupportedVerticals(adapter) {
+  const verticals = adapter?.supports?.verticals;
+  return Array.isArray(verticals) && verticals.length > 0 ? verticals : ["web"];
 }
 
 function normalizeEngineList(engines) {
@@ -48,7 +55,8 @@ export function normalizeRequestedEngines(engines) {
  * `env.SUPPORTED_ENGINES` is still used to filter out engines the deployment
  * does not recognize.
  */
-export function resolveEngineSelection(engines) {
+export function resolveEngineSelection(engines, options = {}) {
+  const vertical = String(options.vertical || "web").trim().toLowerCase() || "web";
   const requestedEngines = normalizeRequestedEngines(engines);
   const supportedEngines = new Set(env.SUPPORTED_ENGINES);
   const seen = new Set();
@@ -71,6 +79,14 @@ export function resolveEngineSelection(engines) {
       continue;
     }
 
+    if (!getSupportedVerticals(adapter).includes(vertical)) {
+      skippedEngines.push({
+        engine,
+        reason: "unsupported_vertical",
+      });
+      continue;
+    }
+
     if (adapter.isAvailable && !adapter.isAvailable()) {
       skippedEngines.push({
         engine,
@@ -89,6 +105,13 @@ export function resolveEngineSelection(engines) {
   };
 }
 
-export function resolveEngineOrder(engines) {
-  return resolveEngineSelection(engines).enabledEngines;
+export function resolveEngineOrder(engines, options = {}) {
+  return resolveEngineSelection(engines, options).enabledEngines;
+}
+
+export function getSupportedEnginesForVertical(vertical = "web") {
+  return Object.keys(ENGINE_REGISTRY).filter((engineName) => {
+    const adapter = ENGINE_REGISTRY[engineName];
+    return getSupportedVerticals(adapter).includes(String(vertical).toLowerCase());
+  });
 }

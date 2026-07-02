@@ -21,7 +21,9 @@ export function formatSearchResponse(result) {
     const tag = score > 0 || type !== "unknown" ? ` ${type}(${score})` : "";
     const desc = String(item.description || "").slice(0, 120);
     const descPart = desc ? ` | ${desc}` : "";
-    return `${index + 1}. ${item.title}${descPart} | ${item.url}${tag}`;
+    const sourcePart = item.source_name ? ` | source: ${item.source_name}` : "";
+    const publishedPart = item.published_text ? ` | published: ${item.published_text}` : "";
+    return `${index + 1}. ${item.title}${sourcePart}${publishedPart}${descPart} | ${item.url}${tag}`;
   });
 
   return lines.join("\n");

@@ -1,14 +1,27 @@
-import { GENERATED_SOURCE_AUTHORITY } from "../../data/sourceAuthority.generated.js";
+import { GENERATED_BLOCKLIST } from "../../data/blocklist.generated.js";
 
 export const normalizeResults = (results) =>
   results
-    .map((result) => ({
-      title: String(result.title || result.name || "").trim(),
-      url: String(result.url || result.link || result.href || "").trim(),
-      description: String(
-        result.description || result.content || result.snippet || ""
-      ).trim(),
-    }))
+    .map((result) => {
+      const {
+        title,
+        name,
+        url,
+        link,
+        href,
+        description,
+        content,
+        snippet,
+        ...rest
+      } = result || {};
+
+      return {
+        ...rest,
+        title: String(title || name || "").trim(),
+        url: String(url || link || href || "").trim(),
+        description: String(description || content || snippet || "").trim(),
+      };
+    })
     .filter((result) => result.url && result.title);
 
 const TRACKING_QUERY_PARAMS = new Set([
@@ -20,7 +33,18 @@ const TRACKING_QUERY_PARAMS = new Set([
   "ref_src",
   "srsltid",
 ]);
+const BLOCKED_HOSTS = new Set(GENERATED_BLOCKLIST.domains || []);
 const SOURCE_AUTHORITY_RULES = [
+  {
+    domains: ["cloudflare.com", "openai.com"],
+    source_type: "official",
+    authority_score: 85,
+  },
+  {
+    domains: ["developers.cloudflare.com", "platform.openai.com"],
+    source_type: "official",
+    authority_score: 90,
+  },
   {
     domains: ["deepseek.com"],
     source_type: "official",
@@ -89,16 +113,6 @@ const SOURCE_AUTHORITY_RULES = [
     source_type: "media",
     authority_score: 28,
   },
-  {
-    domains: ["csdn.net", "juejin.cn"],
-    source_type: "blog",
-    authority_score: -20,
-  },
-  {
-    domains: ["zhihu.com"],
-    source_type: "community",
-    authority_score: -10,
-  },
 ];
 const AI_MODEL_QUERY_RE =
   /ai|agent|benchmark|deepseek|gpt|llm|model|性能|模型|推理|评测|测评|基准|代码|上下文|开源/i;
@@ -121,41 +135,16 @@ function getMatchedAuthorityRule(hostname) {
   );
 }
 
-function getGeneratedAuthorityRule(hostname) {
-  const domains = GENERATED_SOURCE_AUTHORITY.domains || {};
-  const parts = hostname.split(".");
-
-  for (let index = 0; index <= parts.length - 2; index += 1) {
-    const candidate = parts.slice(index).join(".");
-    if (domains[candidate]) {
-      return domains[candidate];
-    }
-  }
-
-  return null;
-}
-
 function getSourceAuthority(rawUrl, query) {
   try {
     const url = new URL(rawUrl);
     const hostname = url.hostname.toLowerCase();
     const rule = getMatchedAuthorityRule(hostname);
-    const generatedRule = getGeneratedAuthorityRule(hostname);
     const isAiModelQuery = AI_MODEL_QUERY_RE.test(String(query || ""));
     const mobilePenalty = hostname.startsWith("m.") ? -5 : 0;
     const pdfPenalty = PDF_PATH_RE.test(`${url.pathname}${url.search}`) ? -15 : 0;
 
     if (!rule) {
-      if (generatedRule) {
-        return {
-          source_type: generatedRule.source_type || "low_credibility",
-          authority_score:
-            Number.parseInt(generatedRule.authority_score || "0", 10) +
-            mobilePenalty +
-            pdfPenalty,
-        };
-      }
-
       return {
         source_type: PDF_PATH_RE.test(`${url.pathname}${url.search}`)
           ? "document"
@@ -177,6 +166,28 @@ function getSourceAuthority(rawUrl, query) {
       source_type: "unknown",
       authority_score: 0,
     };
+  }
+}
+
+function isBlockedHostname(hostname) {
+  const parts = String(hostname || "").toLowerCase().split(".");
+
+  for (let index = 0; index <= parts.length - 2; index += 1) {
+    const candidate = parts.slice(index).join(".");
+    if (BLOCKED_HOSTS.has(candidate)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isBlockedUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return isBlockedHostname(url.hostname);
+  } catch (_) {
+    return false;
   }
 }
 
@@ -235,6 +246,7 @@ function calculateResultScore({
   title,
   description,
   url,
+  engine,
   sourceType,
   enginePriority,
   position,
@@ -259,6 +271,15 @@ function calculateResultScore({
   const hasAnyTokenMatch = titleMatches > 0 || descriptionMatches > 0;
   const officialPhraseBoost =
     sourceType === "official" && (titlePhraseMatch || urlPhraseMatch) ? 20 : 0;
+  const englishEngineBoost = isMostlyLatinQuery(query)
+    ? {
+        brave: 18,
+        bing: 15,
+        yahoo: 2,
+        mojeek: -4,
+        baidu: -20,
+      }[engine] || 0
+    : 0;
   const latinQueryHanPenalty =
     isMostlyLatinQuery(query) && sourceType !== "official"
       ? getHanPenalty(`${title} ${description}`)
@@ -282,6 +303,7 @@ function calculateResultScore({
     (descriptionPhraseMatch ? 10 : 0) +
     (urlPhraseMatch ? 20 : 0) +
     officialPhraseBoost +
+    englishEngineBoost +
     latinQueryHanPenalty +
     hanQueryNoMatchPenalty
   );
@@ -301,6 +323,10 @@ export function dedupeAndRankResults({ engineResults, query, registry }) {
 
     normalizeResults(results).forEach((result, index) => {
       const canonicalUrl = canonicalizeUrl(result.url);
+      if (isBlockedUrl(canonicalUrl)) {
+        return;
+      }
+
       const sourceAuthority = getSourceAuthority(canonicalUrl, query);
       const candidate = {
         ...result,
@@ -315,6 +341,7 @@ export function dedupeAndRankResults({ engineResults, query, registry }) {
             title: result.title,
             description: result.description,
             url: canonicalUrl,
+            engine,
             sourceType: sourceAuthority.source_type,
             enginePriority,
             position: index,

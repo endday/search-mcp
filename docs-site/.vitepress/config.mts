@@ -4,6 +4,7 @@ export default defineConfig({
   lang: "zh-CN",
   title: "Search MCP",
   description: "Search MCP 本地文档站",
+  base: process.env.GITHUB_ACTIONS ? "/cloudflare-search/" : "/",
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
@@ -39,6 +40,7 @@ export default defineConfig({
           text: "Product",
           items: [
             { text: "版本路线图", link: "/product/roadmap" },
+            { text: "Search MCP 迭代计划", link: "/product/search-iteration-plan" },
             { text: "Source Policy Engine", link: "/product/source-policy-engine" },
             { text: "AI Context Resolver 草案", link: "/product/ai-context-resolver" }
           ]

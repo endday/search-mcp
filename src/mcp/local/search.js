@@ -3,6 +3,7 @@ import { ApiError } from "../../core/errors.js";
 import { searchAllWithMeta } from "../../search/gateway.js";
 
 const LATIN_QUERY_RE = /^[\p{Script=Latin}\p{Number}\s'".,!?():/_+-]+$/u;
+const DEFAULT_NEWS_ENGINES = ["bing", "brave", "yahoo"];
 
 function normalizeSourceTypeList(value) {
   const items = Array.isArray(value)
@@ -123,9 +124,13 @@ function isChineseLanguage(language) {
   return String(language || "").trim().toLowerCase().startsWith("zh");
 }
 
-function resolveRequestedEngines(engines, language) {
+function resolveRequestedEngines(engines, language, vertical = "web") {
   if (Array.isArray(engines) && engines.length > 0) {
     return engines;
+  }
+
+  if (vertical === "news") {
+    return DEFAULT_NEWS_ENGINES;
   }
 
   return isChineseLanguage(language)
@@ -160,6 +165,31 @@ function createRuntimeContext(query, clientId) {
   };
 }
 
+function paginateResponse(response, options) {
+  const offset = Math.max(0, Number.parseInt(options.offset ?? "0", 10) || 0);
+  const count =
+    options.count === undefined || options.count === null || options.count === ""
+      ? null
+      : Math.max(1, Number.parseInt(options.count, 10) || 0);
+
+  if (offset === 0 && count === null) {
+    return response;
+  }
+
+  const results =
+    count === null
+      ? response.results.slice(offset)
+      : response.results.slice(offset, offset + count);
+
+  return {
+    ...response,
+    number_of_results: results.length,
+    offset,
+    count,
+    results,
+  };
+}
+
 export async function searchLocal(query, engines = null, options = {}) {
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
@@ -171,14 +201,19 @@ export async function searchLocal(query, engines = null, options = {}) {
     });
   }
 
-  const language = resolveLanguage(normalizedQuery, options.language);
-  const requestedEngines = resolveRequestedEngines(engines, language);
+  const vertical = String(options.vertical || "web").trim().toLowerCase() || "web";
+  const language = resolveLanguage(
+    normalizedQuery,
+    options.search_lang || options.ui_lang || options.language
+  );
+  const requestedEngines = resolveRequestedEngines(engines, language, vertical);
   const effectiveQuery = appendLocationToQuery(normalizedQuery, options.location);
   const filters = normalizeSourceFilters(options);
   const clientId = String(options.clientId || "mcp-local").trim() || "mcp-local";
   const runtimeContext = createRuntimeContext(effectiveQuery, clientId);
 
   const { response } = await searchAllWithMeta({
+    vertical,
     query: effectiveQuery,
     engines: requestedEngines,
     language,
@@ -189,7 +224,7 @@ export async function searchLocal(query, engines = null, options = {}) {
   });
 
   return {
-    ...applySourceFilters(response, filters),
+    ...paginateResponse(applySourceFilters(response, filters), options),
     query: normalizedQuery,
     effective_query: effectiveQuery,
     location: options.location || null,

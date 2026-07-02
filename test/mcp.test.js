@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { loadMcpConfig } from "../src/mcp/config.js";
 import { createServer } from "../src/mcp/server.js";
+import { handleNewsSearch } from "../src/mcp/tools/newsSearch.js";
 import { handleWebSearch } from "../src/mcp/tools/webSearch.js";
 import { handleContent } from "../src/mcp/tools/content.js";
 import { handleJinaContent } from "../src/mcp/tools/jinaContent.js";
@@ -109,6 +110,67 @@ test("handleWebSearch uses local search path", async () => {
     assert.equal(result.isError, undefined);
     assert.match(result.content[0].text, /Cloudflare Workers Guide/);
     assert.match(result.content[0].text, /https:\/\/example.com\/workers/);
+  });
+});
+
+test("handleNewsSearch uses explicit news search path", async () => {
+  const config = {
+    mode: "local",
+    jinaApiKey: "",
+    jinaBaseUrl: "https://r.jina.ai/",
+    localClientId: "mcp-local:test-news",
+    allEngines: ["bing", "yahoo", "brave"],
+  };
+
+  await withFetchStub(async (url) => {
+    const value = String(url);
+    if (value.includes("/news/search?") && value.includes("bing.com")) {
+      return new Response(
+        `<?xml version="1.0" encoding="utf-8" ?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>DeepSeek headline</title>
+              <link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fexample.com%2Fdeepseek-news</link>
+              <description>DeepSeek article summary.</description>
+              <pubDate>Mon, 30 Jun 2026 10:00:00 GMT</pubDate>
+              <News:Source>Example News</News:Source>
+            </item>
+          </channel>
+        </rss>`,
+        {
+          status: 200,
+          headers: { "content-type": "application/rss+xml; charset=utf-8" },
+        }
+      );
+    }
+
+    if (value.includes("search.yahoo.com")) {
+      return new Response("<html><body></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (value.includes("search.brave.com")) {
+      return new Response("<html><body></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  }, async () => {
+    const result = await handleNewsSearch(config, {
+      query: "DeepSeek",
+      engines: ["bing"],
+      count: 1,
+      search_lang: "en-US",
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.match(result.content[0].text, /DeepSeek headline/);
+    assert.match(result.content[0].text, /source: Example News/);
   });
 });
 
@@ -263,4 +325,18 @@ test("createServer registers expected MCP tools", async () => {
 
   const server = createServer(config);
   assert.ok(server);
+});
+
+test("package root exports library entrypoints without starting the CLI", async () => {
+  const pkg = await import("../index.js");
+
+  assert.equal(typeof pkg.main, "function");
+  assert.equal(typeof pkg.searchLocal, "function");
+  assert.equal(typeof pkg.searchAll, "function");
+  assert.equal(typeof pkg.searchAllWithMeta, "function");
+  assert.equal(typeof pkg.createServer, "function");
+  assert.equal(typeof pkg.startServer, "function");
+  assert.equal(typeof pkg.loadMcpConfig, "function");
+  assert.equal(typeof pkg.setEnv, "function");
+  assert.ok(pkg.env);
 });

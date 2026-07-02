@@ -125,6 +125,21 @@ export function extractBingRedirectUrl(bingUrl) {
   }
 }
 
+export function extractBingNewsRedirectUrl(bingUrl) {
+  if (!bingUrl || !bingUrl.includes("bing.com/news/apiclick.aspx?")) {
+    return extractBingRedirectUrl(bingUrl);
+  }
+
+  try {
+    const decodedUrl = bingUrl.replace(/&amp;/g, "&");
+    const url = new URL(decodedUrl);
+    const target = url.searchParams.get("url");
+    return target ? decodeURIComponent(target) : bingUrl;
+  } catch (_) {
+    return bingUrl;
+  }
+}
+
 export function parseBingResults(html) {
   if (isBingChallengeResponse(html)) {
     throwBingChallengeError("html");
@@ -211,6 +226,40 @@ export function parseBingRssResults(xml) {
       code: "UPSTREAM_PARSE_ERROR",
       category: "upstream",
       message: `Bing RSS parser could not find valid results (items=${items.length}, normalized=${results.length})`,
+    });
+  }
+
+  return results;
+}
+
+export function parseBingNewsRssResults(xml) {
+  if (isBingChallengeResponse(xml)) {
+    throwBingChallengeError("rss");
+  }
+
+  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)];
+  const results = normalizeResults(
+    items.map((item) => {
+      const source = item[1];
+
+      return {
+        title: cleanText(extractXmlTagContent(source, "title")),
+        url: extractBingNewsRedirectUrl(
+          decodeXmlEntities(extractXmlTagContent(source, "link"))
+        ),
+        description: cleanText(extractXmlTagContent(source, "description")),
+        published_text: cleanText(extractXmlTagContent(source, "pubDate")),
+        source_name: cleanText(extractXmlTagContent(source, "News:Source")),
+      };
+    })
+  );
+
+  if (items.length === 0 || results.length === 0) {
+    throw new ApiError({
+      status: 502,
+      code: "UPSTREAM_PARSE_ERROR",
+      category: "upstream",
+      message: `Bing News RSS parser could not find valid results (items=${items.length}, normalized=${results.length})`,
     });
   }
 
@@ -317,6 +366,21 @@ function buildBingRssUrl({ query, language, time_range }) {
   return searchUrl;
 }
 
+function buildBingNewsRssUrl({ query, language }) {
+  const searchUrl = new URL("https://www.bing.com/news/search");
+  searchUrl.searchParams.set("q", query);
+  searchUrl.searchParams.set("format", "rss");
+
+  const languageConfig = mapLanguage(language, BING_LANGUAGE, null);
+  if (languageConfig) {
+    searchUrl.searchParams.set("setlang", languageConfig.setlang);
+    searchUrl.searchParams.set("cc", languageConfig.cc);
+    searchUrl.searchParams.set("mkt", languageConfig.mkt);
+  }
+
+  return searchUrl;
+}
+
 async function fetchBingHtml(searchUrl, { signal, language, runtimeContext }) {
   const locale = mapLanguage(language, BING_LANGUAGE, BING_LANGUAGE.en);
   return fetchSearchText(searchUrl.toString(), {
@@ -367,8 +431,25 @@ async function fetchBingRss(searchUrl, { signal, language, runtimeContext }) {
 }
 
 async function searchBing(params) {
-  const { query, language, time_range, pageno, signal, runtimeContext } = params;
+  const {
+    vertical = "web",
+    query,
+    language,
+    time_range,
+    pageno,
+    signal,
+    runtimeContext,
+  } = params;
   const page = resolvePageNumber(pageno);
+
+  if (vertical === "news") {
+    const rssUrl = buildBingNewsRssUrl({
+      query,
+      language,
+    });
+    const rss = await fetchBingRss(rssUrl, { signal, language, runtimeContext });
+    return parseBingNewsRssResults(rss);
+  }
 
   if (page > 0) {
     throw new ApiError({
@@ -412,9 +493,14 @@ export const bingAdapter = {
     minRequestIntervalMs: 100,
   },
   supports: {
+    verticals: ["web", "news"],
     language: true,
     time_range: true,
     pageno: false,
+    news: {
+      time_range: false,
+      pageno: false,
+    },
   },
   isAvailable: () => true,
   search: searchBing,

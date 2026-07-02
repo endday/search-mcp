@@ -1,36 +1,41 @@
 import { formatSearchResponse } from "../format.js";
 import { searchLocal } from "../local/search.js";
 
-function buildSearchOptions(args) {
-  const options = {
+export function buildSearchOptions(args, overrides = {}) {
+  const searchOptions = {
+    vertical: overrides.vertical || "web",
     language: args.language,
+    search_lang: args.search_lang,
+    ui_lang: args.ui_lang,
     location: args.location,
     time_range: args.time_range,
     pageno: args.pageno,
+    count: args.count,
+    offset: args.offset,
     clientId: args.client_id,
   };
 
   if (Number.isFinite(args.min_authority_score)) {
-    options.min_authority_score = args.min_authority_score;
+    searchOptions.min_authority_score = args.min_authority_score;
   }
   if (Array.isArray(args.include_source_types)) {
-    options.include_source_types = args.include_source_types;
+    searchOptions.include_source_types = args.include_source_types;
   }
   if (Array.isArray(args.exclude_source_types)) {
-    options.exclude_source_types = args.exclude_source_types;
+    searchOptions.exclude_source_types = args.exclude_source_types;
   }
 
-  return options;
+  return searchOptions;
 }
 
-async function executeSearch(config, args) {
+export async function executeSearch(config, args, overrides = {}) {
   const engines = Array.isArray(args.engines) && args.engines.length > 0 ? args.engines : null;
-  const options = {
-    ...buildSearchOptions(args),
+  const searchOptions = {
+    ...buildSearchOptions(args, overrides),
     clientId: args.client_id || config.localClientId,
   };
 
-  return searchLocal(args.query, engines, options);
+  return searchLocal(args.query, engines, searchOptions);
 }
 
 export async function handleWebSearch(config, args) {

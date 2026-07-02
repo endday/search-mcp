@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "description": "Project-maintained blocklist overrides. allow_domains prevents false positives from upstream denylist subscriptions.",
+  "allow_domains": [
+    "cloudflare.com",
+    "developers.cloudflare.com",
+    "deepseek.com",
+    "openai.com",
+    "platform.openai.com"
+  ]
+}

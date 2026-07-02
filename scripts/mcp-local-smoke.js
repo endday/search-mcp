@@ -8,17 +8,17 @@ const SEARCH_CASES = [
   {
     id: "en_official",
     query: "cloudflare workers",
-    engines: ["bing", "yahoo"],
+    engines: ["bing", "brave", "yahoo", "mojeek"],
   },
   {
     id: "en_model",
     query: "OpenAI GPT-5",
-    engines: ["bing", "yahoo"],
+    engines: ["bing", "brave", "yahoo", "mojeek"],
   },
   {
     id: "zh_brand",
     query: "深度求索 V4",
-    engines: ["bing", "toutiao"],
+    engines: ["baidu", "bing"],
   },
 ];
 

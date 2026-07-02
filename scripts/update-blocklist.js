@@ -1,0 +1,215 @@
+#!/usr/bin/env node
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = resolve(__dirname, "..");
+const DATA_DIR = resolve(ROOT_DIR, "data");
+const OVERRIDES_INPUT = resolve(DATA_DIR, "blocklist.overrides.json");
+const JSON_OUTPUT = resolve(DATA_DIR, "blocklist.generated.json");
+const JS_OUTPUT = resolve(DATA_DIR, "blocklist.generated.js");
+
+const SOURCES = [
+  {
+    name: "obgnail/chinese-internet-is-dead",
+    url: "https://cdn.jsdelivr.net/gh/obgnail/chinese-internet-is-dead@master/blocklist.txt",
+  },
+  {
+    name: "eallion/uBlacklist-subscription-compilation",
+    url: "https://raw.githubusercontent.com/eallion/uBlacklist-subscription-compilation/main/uBlacklist.txt",
+  },
+];
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+async function fetchWithRetries(url) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "search-mcp-blocklist-updater/1.0",
+        },
+      });
+
+      if (response.ok) {
+        return response.text();
+      }
+
+      if (response.status < 500) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < 3) {
+      await sleep(500 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+function normalizeDomain(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+
+  const sanitized = raw
+    .replace(/^@+/, "")
+    .replace(/^\|\|/, "")
+    .replace(/^\*+:\/\//, "")
+    .replace(/^\*\./, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "")
+    .replace(/:\*$/, "")
+    .replace(/^\.+/, "")
+    .replace(/\*+/g, "")
+    .trim();
+
+  if (!sanitized) {
+    return "";
+  }
+
+  try {
+    const url = sanitized.includes("://")
+      ? new URL(sanitized)
+      : new URL(`https://${sanitized}`);
+    const hostname = url.hostname.replace(/^www\./, "").toLowerCase();
+    if (!/^[a-z0-9.-]+$/.test(hostname) || !hostname.includes(".")) {
+      return "";
+    }
+    return hostname;
+  } catch (_) {
+    if (!/^[a-z0-9.-]+$/.test(sanitized) || !sanitized.includes(".")) {
+      return "";
+    }
+    return sanitized;
+  }
+}
+
+function extractCandidateDomains(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || trimmed.startsWith("!") || trimmed.startsWith("#")) {
+    return [];
+  }
+
+  if (trimmed.startsWith("@@")) {
+    return [];
+  }
+
+  if (trimmed.includes("##") || trimmed.includes("#?#")) {
+    return [];
+  }
+
+  if (trimmed.startsWith("title/")) {
+    return [];
+  }
+
+  if (/[()[\]{}]/.test(trimmed)) {
+    return [];
+  }
+
+  const matches = new Set();
+
+  const directDomain = normalizeDomain(trimmed);
+  if (directDomain) {
+    matches.add(directDomain);
+  }
+
+  const wildcardMatches = trimmed.match(/\*:\/\/(?:\*\.)?([a-z0-9.-]+\.[a-z]{2,})/gi) || [];
+  for (const match of wildcardMatches) {
+    const domain = normalizeDomain(match);
+    if (domain) {
+      matches.add(domain);
+    }
+  }
+
+  const urlMatches = trimmed.match(/https?:\/\/(?:www\.)?([a-z0-9.-]+\.[a-z]{2,})/gi) || [];
+  for (const match of urlMatches) {
+    const domain = normalizeDomain(match);
+    if (domain) {
+      matches.add(domain);
+    }
+  }
+
+  return [...matches];
+}
+
+async function main() {
+  const domains = new Set();
+  const sources = [];
+
+  for (const source of SOURCES) {
+    const text = await fetchWithRetries(source.url);
+    let records = 0;
+
+    for (const line of text.split(/\r?\n/u)) {
+      const extracted = extractCandidateDomains(line);
+      if (extracted.length === 0) {
+        continue;
+      }
+
+      records += extracted.length;
+      extracted.forEach((domain) => domains.add(domain));
+    }
+
+    sources.push({
+      ...source,
+      records,
+    });
+  }
+
+  let allowDomains = [];
+  try {
+    const overrides = JSON.parse(await readFile(OVERRIDES_INPUT, "utf8"));
+    allowDomains = Array.isArray(overrides.allow_domains)
+      ? overrides.allow_domains.map(normalizeDomain).filter(Boolean)
+      : [];
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  for (const domain of allowDomains) {
+    domains.delete(domain);
+  }
+
+  const blocklist = [...domains].sort((left, right) => left.localeCompare(right));
+  const payload = {
+    version: 1,
+    generated_at: new Date().toISOString(),
+    source_count: sources.length,
+    domain_count: blocklist.length,
+    allow_domain_count: allowDomains.length,
+    sources,
+    allow_domains: allowDomains,
+    domains: blocklist,
+  };
+
+  const json = `${JSON.stringify(payload, null, 2)}\n`;
+  const js =
+    "// Generated by scripts/update-blocklist.js. Do not edit by hand.\n" +
+    `export const GENERATED_BLOCKLIST = ${JSON.stringify(payload)};\n`;
+
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(JSON_OUTPUT, json);
+  await writeFile(JS_OUTPUT, js);
+
+  console.log(`Wrote ${payload.domain_count} blocked domains to data/`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

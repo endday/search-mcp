@@ -11,6 +11,7 @@
 仓库已经不再提供远程 Worker 服务，主线只保留：
 
 - 本地 `web_search`
+- 本地 `news_search`
 - 本地 `content`
 - 可选的 `jina_content`
 
@@ -63,11 +64,19 @@ npx -y @endday/search-mcp
 ## 暴露的工具
 
 - `web_search`：本地抓取搜索结果并返回排序后的结果
+- `news_search`：显式新闻搜索，走支持 news vertical 的引擎
 - `content`：本地抓取网页并提取正文
 - `jina_content`：通过 Jina AI 阅读器读取网页
 
+## 排序与过滤
+
+- 命中本地生成的黑名单域名会直接过滤
+- 普通域名默认大致同权
+- 只有少量已知高价值来源会拿到确定性的正向加分
+
 ## 当前支持的引擎
 
+- `baidu`
 - `bing`
 - `startpage`
 - `duckduckgo`
@@ -77,17 +86,30 @@ npx -y @endday/search-mcp
 - `mojeek`
 - `toutiao`
 
+当前本地环境下推荐的默认组合：
+
+- 中文查询：`baidu`、`bing`
+- 非中文查询：`bing`、`brave`、`yahoo`、`mojeek`
+
 ## 开发命令
 
 ```bash
 npm test
 npm run smoke
+npm run update:blocklist
 npm run docs:dev
 ```
 
 ## 文档
 
 长文档已经迁到 [docs-site](./docs-site) 里的 VitePress 站点。
+文档站建议直接发布到 GitHub Pages，不再需要单独保留 Cloudflare Worker 首页。
+
+GitHub Pages 配置方式：
+
+1. 在仓库设置里启用 `GitHub Pages`
+2. Source 选择 `GitHub Actions`
+3. 使用 `.github/workflows/docs-pages.yml` 自动构建并发布 VitePress 站点
 
 ## 许可证
 
