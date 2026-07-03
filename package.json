@@ -1,33 +1,30 @@
 {
   "name": "@endday/search-mcp",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Local MCP server for aggregated web search and content extraction",
   "type": "module",
-  "main": "./index.js",
-  "types": "./index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "publishConfig": {
     "access": "public"
   },
   "bin": {
-    "search-mcp": "mcp/search-mcp.js"
+    "search-mcp": "dist/search-mcp.js"
   },
   "exports": {
     ".": {
-      "types": "./index.d.ts",
-      "import": "./index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
-    "./cli": "./mcp/search-mcp.js"
+    "./cli": "./dist/search-mcp.js"
   },
   "files": [
-    "data/blocklist.generated.js",
-    "index.js",
-    "mcp/search-mcp.js",
-    "src/**/*.js",
-    "envs.js",
-    "index.d.ts"
+    "dist"
   ],
   "scripts": {
-    "start": "node mcp/search-mcp.js",
+    "build": "node scripts/build-package.js",
+    "prepack": "npm run build",
+    "start": "node dist/search-mcp.js",
     "test": "node --test test",
     "smoke": "node scripts/mcp-local-smoke.js",
     "update:blocklist": "node scripts/update-blocklist.js",
@@ -67,5 +64,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { main } from "../src/mcp/index.js";
 
 main().catch((error) => {
