@@ -1,10 +1,14 @@
 import { defineConfig } from "vitepress";
 
+const repoName = process.env.GITHUB_REPOSITORY?.split("/")[1];
+const defaultBase = repoName ? `/${repoName}/` : "/";
+const base = process.env.VITEPRESS_BASE ?? defaultBase;
+
 export default defineConfig({
   lang: "zh-CN",
   title: "Search MCP",
   description: "Search MCP 本地文档站",
-  base: process.env.GITHUB_ACTIONS ? "/search-mcp/" : "/",
+  base,
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
